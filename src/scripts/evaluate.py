@@ -37,6 +37,7 @@ def compute_confusion_matrix(input_lines: list[str], target_lines: list[str]) ->
 
 
 def main():
+    # TODO: Make file paths configurable (e.g., via argparse)
     input_lines = load_lines('data/input.txt')
     target_lines = load_lines('data/target.txt')
     tp, tn, fp, fn = compute_confusion_matrix(input_lines, target_lines)

@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 """
-Training script for the Paraphrase - Human Sentence Classifier using Trax.
-It loads data, builds a vocabulary, defines a Transformer-based classifier, and trains the model.
+Data handling module for the Paraphrase Classifier.
+Contains the HumanPhraseData class for loading, preprocessing, and generating data batches.
 """
 
 import csv
-import os
 import random as rnd
 from pathlib import Path
 from typing import Any, Callable, List, Tuple
 
 import numpy as np
 import trax
-from trax import layers as tl
-from trax.supervised import training
-
-# Initialize CPU environment (modify for GPU/TPU if needed)
-trax.supervised.trainer_lib.init_cpu_environment()
 
 # Constant for end-of-sentence token
 EOS = 1
@@ -41,7 +35,15 @@ class HumanPhraseData:
         Subsequent columns are treated as negative (machine-generated) examples.
         """
         data = []
-        with open(filename, 'r', encoding='utf-8') as f:
+        # Ensure filename is treated as relative to the project root or an absolute path
+        filepath = Path(filename)
+        if not filepath.exists():
+             # Attempt relative path from src if not found directly
+             filepath = Path('..') / filename # Assuming script runs from src/ or similar
+             if not filepath.exists():
+                 raise FileNotFoundError(f"Data file not found: {filename}")
+
+        with open(filepath, 'r', encoding='utf-8') as f:
             reader = csv.reader(f, delimiter='\t')
             for row in reader:
                 if len(row) > 1:
@@ -59,6 +61,7 @@ class HumanPhraseData:
         if self.vocab_type == "subword":
             all_text = [text for text, _ in data]
             # Using Trax's Tokenize to build a subword vocabulary.
+            # Ensure vocab_dir is specified if needed, or handle potential default locations.
             self.vocab = trax.data.Tokenize(vocab_file=None, vocab_dir=None, vocab_size=self.vocab_size, keys=("text",))
             # Initialize the tokenizer with the provided data (using a dummy filename of None)
             self.vocab.init_from_file(None, data=all_text)
@@ -79,13 +82,16 @@ class HumanPhraseData:
         For subword, applies the tokenizer.
         For character, maps each character to its index and appends an EOS token.
         """
+        if self.vocab is None:
+             raise RuntimeError("Vocabulary has not been built yet. Call build_vocab first.")
+
         encoded_data = []
         for text, label in data:
             if self.vocab_type == "subword":
                 # The tokenizer returns a list of token IDs when called on text.
                 encoded_text = self.vocab(text)
             elif self.vocab_type == "character":
-                encoded_text = [self.vocab[char] for char in text] + [EOS]
+                encoded_text = [self.vocab.get(char, self.vocab['<pad>']) for char in text] + [EOS] # Use get for safety
             else:
                 raise ValueError(f"Unsupported vocab type: {self.vocab_type}")
             encoded_data.append((list(encoded_text), label))
@@ -96,38 +102,48 @@ class HumanPhraseData:
         Yields batches of encoded data.
         Each batch is padded so that all sequences share the same length.
         """
+        if not data:
+             return lambda: iter([]) # Return empty generator if no data
+
+        epoch_data = list(data) # Create a copy for shuffling per epoch
         if shuffle:
-            rnd.shuffle(data)
+            rnd.shuffle(epoch_data)
 
-        batch = []
-        for example in data:
-            batch.append(example)
-            if len(batch) == batch_size:
-                max_len = max(len(seq) for seq, _ in batch)
-                inputs = np.array([seq + [0] * (max_len - len(seq)) for seq, _ in batch])
-                targets = np.array([label for _, label in batch])
-                yield (inputs, targets, np.ones_like(targets))
-                batch = []
+        idx = 0
+        while idx < len(epoch_data):
+            batch = epoch_data[idx : idx + batch_size]
+            idx += batch_size
 
-        if batch:
+            if not batch: continue # Should not happen with check above, but safety
+
             max_len = max(len(seq) for seq, _ in batch)
-            inputs = np.array([seq + [0] * (max_len - len(seq)) for seq, _ in batch])
-            targets = np.array([label for _, label in batch])
-            yield (inputs, targets, np.ones_like(targets))
+            # Pad sequences with 0 (assuming 0 is the padding token index)
+            inputs = np.array([seq + [0] * (max_len - len(seq)) for seq, _ in batch], dtype=np.int32)
+            targets = np.array([label for _, label in batch], dtype=np.int32)
+            # Weights: typically 1 for real tokens, 0 for padding. Here, just 1s for sequence classification.
+            weights = np.ones_like(targets, dtype=np.float32)
+
+            yield (inputs, targets, weights)
+
 
     def get_data_streams(self, batch_size: int) -> Tuple[Callable, Callable]:
         """
-        Returns lambda functions for the training and evaluation data generators.
+        Loads data, builds vocab, encodes data, and returns lambda functions
+        for the training and evaluation data generators.
         """
-        train_data = self.load_data(self.train_file)
-        eval_data = self.load_data(self.eval_file)
+        # Load data
+        train_data_raw = self.load_data(self.train_file)
+        eval_data_raw = self.load_data(self.eval_file)
 
         # Build vocabulary only from training data
-        self.build_vocab(train_data)
+        self.build_vocab(train_data_raw)
 
-        encoded_train_data = self.encode_data(train_data)
-        encoded_eval_data = self.encode_data(eval_data)
+        # Encode data
+        encoded_train_data = self.encode_data(train_data_raw)
+        encoded_eval_data = self.encode_data(eval_data_raw)
 
+        # Create generator functions
+        # Need to wrap the generator call in a lambda to make it restartable for each epoch
         train_stream = lambda: self.data_generator(encoded_train_data, batch_size, shuffle=True)
         eval_stream = lambda: self.data_generator(encoded_eval_data, batch_size, shuffle=False)
 
@@ -137,77 +153,14 @@ class HumanPhraseData:
         """
         Returns the size of the vocabulary.
         """
+        if self.vocab is None:
+             raise RuntimeError("Vocabulary has not been built yet.")
+
         if self.vocab_type == "subword":
-            # Assuming a fixed vocab_size for subword tokenization
+            # For trax.data.Tokenize, vocab_size is usually pre-defined or accessible via an attribute
+            # Let's rely on the initialized vocab_size attribute for consistency
             return self.vocab_size
         elif self.vocab_type == "character":
             return len(self.vocab)
         else:
             raise ValueError(f"Unsupported vocab type: {self.vocab_type}")
-
-
-def Classifier(vocab_size: int, mode: str = 'train') -> tl.Serial:
-    """
-    Defines a simple Transformer-based classifier model.
-    """
-    return tl.Serial(
-        tl.Embedding(vocab_size, 512),
-        tl.Mean(axis=1),  # Average over the sequence dimension
-        tl.Dense(256),
-        tl.Relu(),
-        tl.Dense(2),
-        tl.LogSoftmax()  # Output probabilities for two classes
-    )
-
-
-def train_model(model: tl.Serial, train_stream: Callable, eval_stream: Callable, output_dir: str, n_steps: int = 1000) -> training.Loop:
-    """
-    Trains the model using the provided training and evaluation data streams.
-    """
-    train_task = training.TrainTask(
-        labeled_data=train_stream(),
-        loss_layer=tl.CrossEntropyLoss(),
-        optimizer=trax.optimizers.Adam(0.01),
-        n_steps_per_checkpoint=100,
-    )
-
-    eval_task = training.EvalTask(
-        labeled_data=eval_stream(),
-        metrics=[tl.CrossEntropyLoss(), tl.Accuracy()]
-    )
-
-    training_loop = training.Loop(model, train_task, eval_tasks=[eval_task], output_dir=output_dir)
-    training_loop.run(n_steps=n_steps)
-    return training_loop
-
-
-def main():
-    # File paths (update as needed)
-    train_file = "parabank.tsv"
-    eval_file = "eval.tsv"
-    output_dir = "model_output"
-
-    # Training parameters
-    batch_size = 16
-    n_steps = 500  # Adjust as needed for demonstration or full training
-
-    # Choose vocabulary type: 'subword' or 'character'
-    vocab_type = "subword"
-
-    # Data handling
-    data_handler = HumanPhraseData(train_file, eval_file, vocab_type=vocab_type)
-    train_stream, eval_stream = data_handler.get_data_streams(batch_size)
-
-    # Determine vocabulary size based on tokenization type
-    vocab_size = data_handler.get_vocab_size()
-
-    # Model initialization
-    model = Classifier(vocab_size)
-
-    # Train the model
-    train_model(model, train_stream, eval_stream, output_dir, n_steps)
-    print("Training complete. Model saved in:", output_dir)
-
-
-if __name__ == "__main__":
-    main()
