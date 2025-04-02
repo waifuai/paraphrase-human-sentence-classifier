@@ -1,122 +1,171 @@
 #!/usr/bin/env python3
 """
-Main training script for the Paraphrase - Human Sentence Classifier.
+Main training script for the Human/Paraphrase Sentence Classifier using Hugging Face Transformers.
 
 This script orchestrates the data loading, model definition, training,
-and saving of the classifier model using the Trax library.
+and saving of the classifier model using the Trainer API.
 """
 
 import argparse
 import os
-from typing import Callable
+import numpy as np
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 
-import trax
-from trax import layers as tl
-from trax.supervised import training
+# Ensure imports work correctly when running as a module (e.g., python -m src.scripts.train)
+# Use relative imports within the 'src' package
+from ..classifier.data import load_and_tokenize_data
+from ..classifier.model import load_model
 
-# Assuming src is in PYTHONPATH (as per pytest.ini)
-from poetry.data import HumanPhraseData
-from poetry.model import Classifier
+# Import necessary Hugging Face classes
+from transformers import Trainer, TrainingArguments, AutoTokenizer, EarlyStoppingCallback
+import torch # Import torch to check for GPU availability
 
-# Initialize CPU environment (modify for GPU/TPU if needed)
-# Consider making device selection configurable
-trax.supervised.trainer_lib.init_cpu_environment()
-
-
-def train_model(model: tl.Serial, train_stream: Callable, eval_stream: Callable, output_dir: str, n_steps: int = 1000, checkpoint_steps: int = 100) -> training.Loop:
+def compute_metrics(pred):
     """
-    Trains the model using the provided training and evaluation data streams.
+    Computes evaluation metrics from predictions.
 
     Args:
-        model: The Trax model to train.
-        train_stream: A callable that yields training batches.
-        eval_stream: A callable that yields evaluation batches.
-        output_dir: Directory to save checkpoints and model artifacts.
-        n_steps: Total number of training steps.
-        checkpoint_steps: Frequency (in steps) for saving checkpoints.
+        pred: An EvalPrediction object containing predictions and label_ids.
 
     Returns:
-        The completed Trax training loop object.
+        A dictionary containing accuracy, precision, recall, f1, and confusion matrix.
     """
-    # Ensure output directory exists
-    os.makedirs(output_dir, exist_ok=True)
+    labels = pred.label_ids
+    preds = pred.predictions.argmax(-1)
 
-    train_task = training.TrainTask(
-        labeled_data=train_stream(),
-        loss_layer=tl.CrossEntropyLoss(),
-        optimizer=trax.optimizers.Adam(0.01), # TODO: Make learning rate configurable
-        n_steps_per_checkpoint=checkpoint_steps,
-    )
+    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
+    acc = accuracy_score(labels, preds)
+    cm = confusion_matrix(labels, preds).tolist() # Convert numpy array to list for JSON serialization
 
-    eval_task = training.EvalTask(
-        labeled_data=eval_stream(),
-        metrics=[tl.CrossEntropyLoss(), tl.Accuracy()]
-    )
-
-    training_loop = training.Loop(model, train_task, eval_tasks=[eval_task], output_dir=output_dir)
-    training_loop.run(n_steps=n_steps)
-    return training_loop
-
+    return {
+        'accuracy': acc,
+        'f1': f1,
+        'precision': precision,
+        'recall': recall,
+        'confusion_matrix': cm # Include confusion matrix in results
+    }
 
 def main(args):
     """
     Main function to set up and run the training process.
     """
-    print("Starting training process...")
+    print("Starting training process with Hugging Face Trainer...")
     print(f"Configuration: {args}")
 
-    # Data handling
-    # Note: File paths in HumanPhraseData might need adjustment if they are relative
-    # and this script is run from a different directory than the original.
-    # Consider passing absolute paths or paths relative to a defined root dir.
-    data_handler = HumanPhraseData(
+    # --- 1. Load Tokenizer and Datasets ---
+    print("Loading and tokenizing data...")
+    # Tokenizer is loaded inside load_and_tokenize_data now
+    tokenized_datasets = load_and_tokenize_data(
         train_file=args.train_file,
         eval_file=args.eval_file,
-        vocab_type=args.vocab_type,
-        vocab_size=args.vocab_size
+        tokenizer_name=args.model_name_or_path, # Use same model name for tokenizer
+        max_length=args.max_length,
+        test_size=args.test_size # Used if eval_file is None
     )
-    train_stream, eval_stream = data_handler.get_data_streams(args.batch_size)
 
-    # Determine vocabulary size based on tokenization type
-    vocab_size = data_handler.get_vocab_size()
-    print(f"Vocabulary size: {vocab_size}")
+    train_dataset = tokenized_datasets["train"]
+    eval_dataset = tokenized_datasets["test"] # Use 'test' split as eval
 
-    # Model initialization
-    # TODO: Make model dimensions configurable
-    model = Classifier(vocab_size=vocab_size, mode='train')
-    print("Model initialized.")
-    # print(model) # Optional: print model structure
+    print(f"Training data size: {len(train_dataset)}")
+    print(f"Evaluation data size: {len(eval_dataset)}")
 
-    # Train the model
-    print(f"Starting training for {args.n_steps} steps...")
-    train_model(
-        model,
-        train_stream,
-        eval_stream,
-        args.output_dir,
-        args.n_steps,
-        args.checkpoint_steps
+    # --- 2. Load Model ---
+    print("Loading pre-trained model...")
+    model = load_model(
+        model_name=args.model_name_or_path,
+        num_labels=args.num_labels
     )
-    print(f"Training complete. Model saved in: {args.output_dir}")
+
+    # --- 3. Define Training Arguments ---
+    print("Defining training arguments...")
+    # Check for GPU availability
+    use_gpu = torch.cuda.is_available() and not args.force_cpu
+    print(f"Using GPU: {use_gpu}")
+
+    training_args = TrainingArguments(
+        output_dir=args.output_dir,
+        num_train_epochs=args.num_train_epochs,
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        per_device_eval_batch_size=args.per_device_eval_batch_size,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        evaluation_strategy="epoch", # Evaluate at the end of each epoch
+        save_strategy="no",          # Do not save checkpoints during training
+        logging_strategy="epoch",    # Log metrics at the end of each epoch
+        load_best_model_at_end=False,# Cannot load best model if not saving checkpoints
+        metric_for_best_model="f1",  # Use F1 score to determine the best model
+        greater_is_better=True,      # Higher F1 is better
+        report_to="none",            # Disable external reporting (like wandb) unless configured
+        fp16=use_gpu,                # Enable mixed precision if GPU is available
+        # no_cuda=not use_gpu,         # Explicitly disable CUDA if force_cpu is True or no GPU
+        push_to_hub=False,           # Do not push to Hugging Face Hub by default
+        # Add other arguments as needed
+    )
+
+    # --- 4. Initialize Trainer ---
+    print("Initializing Trainer...")
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        compute_metrics=compute_metrics,
+        tokenizer=AutoTokenizer.from_pretrained(args.model_name_or_path), # Pass tokenizer for padding consistency
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=args.early_stopping_patience)] # Add early stopping
+    )
+
+    # --- 5. Train ---
+    print("Starting training...")
+    train_result = trainer.train()
+    print("Training finished.")
+
+    # --- 6. Save Model, Tokenizer & Metrics ---
+    print(f"Saving best model to {args.output_dir}...")
+    trainer.save_model(args.output_dir)
+    # Tokenizer is usually saved automatically with save_model, but explicit save is safe
+    # tokenizer.save_pretrained(args.output_dir) # Already done by Trainer
+
+    metrics = train_result.metrics
+    trainer.log_metrics("train", metrics)
+    trainer.save_metrics("train", metrics)
+    trainer.save_state() # Saves optimizer state, scheduler, etc.
+
+    # --- 7. Evaluate on Test Set ---
+    print("Evaluating final model on the evaluation set...")
+    eval_metrics = trainer.evaluate(eval_dataset=eval_dataset)
+    print(f"Evaluation Metrics: {eval_metrics}")
+    # trainer.log_metrics("eval", eval_metrics) # Commented out: Causes formatting error with list (confusion matrix)
+    trainer.save_metrics("eval", eval_metrics)
+
+    print(f"Training complete. Best model and metrics saved in: {args.output_dir}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train the Paraphrase Classifier model.")
+    parser = argparse.ArgumentParser(description="Train a Hugging Face Transformer model for sentence classification.")
 
     # Data arguments
-    parser.add_argument("--train_file", type=str, default="parabank.tsv", help="Path to the training data TSV file.")
-    parser.add_argument("--eval_file", type=str, default="eval.tsv", help="Path to the evaluation data TSV file.")
-    parser.add_argument("--output_dir", type=str, default="model_output", help="Directory to save model checkpoints and outputs.")
+    parser.add_argument("--train_file", type=str, default="data/train.tsv", help="Path to the training data TSV file.")
+    parser.add_argument("--eval_file", type=str, default="data/eval.tsv", help="Path to the evaluation data TSV file. If None, train_file is split.")
+    parser.add_argument("--test_size", type=float, default=0.1, help="Fraction of training data for evaluation if eval_file is None.")
 
-    # Vocabulary arguments
-    parser.add_argument("--vocab_type", type=str, default="subword", choices=["subword", "character"], help="Type of vocabulary to use.")
-    parser.add_argument("--vocab_size", type=int, default=2**14, help="Vocabulary size (used for subword tokenization).")
+    # Model arguments
+    parser.add_argument("--model_name_or_path", type=str, default="distilbert-base-uncased", help="Name/path of the pre-trained model.")
+    parser.add_argument("--num_labels", type=int, default=2, help="Number of classification labels.")
+    parser.add_argument("--max_length", type=int, default=128, help="Maximum sequence length for tokenization.")
 
-    # Training arguments
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size for training and evaluation.")
-    parser.add_argument("--n_steps", type=int, default=500, help="Total number of training steps.")
-    parser.add_argument("--checkpoint_steps", type=int, default=100, help="Save checkpoint every N steps.")
-    # TODO: Add arguments for learning rate, model dimensions, device selection etc.
+    # Training arguments (matching TrainingArguments)
+    parser.add_argument("--output_dir", type=str, default="model_output_hf", help="Directory to save model checkpoints and outputs.")
+    parser.add_argument("--num_train_epochs", type=float, default=3.0, help="Total number of training epochs.")
+    parser.add_argument("--per_device_train_batch_size", type=int, default=8, help="Batch size per device during training.")
+    parser.add_argument("--per_device_eval_batch_size", type=int, default=16, help="Batch size per device during evaluation.")
+    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Initial learning rate.")
+    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for optimization.")
+    parser.add_argument("--early_stopping_patience", type=int, default=3, help="Patience for early stopping.")
+    parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if GPU is available.")
 
     args = parser.parse_args()
+
+    # Ensure output directory exists
+    os.makedirs(args.output_dir, exist_ok=True)
+
     main(args)
