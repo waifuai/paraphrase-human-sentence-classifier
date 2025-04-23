@@ -1,142 +1,174 @@
 #!/usr/bin/env python3
 """
-Data handling module for the Human/Paraphrase Sentence Classifier using Hugging Face libraries.
+Data handling module for the Human/Machine Sentence Classifier.
+Loads data from TSV files into lists of dictionaries.
 """
 
-from datasets import load_dataset, DatasetDict, Dataset, Value # Import Value directly
-from transformers import AutoTokenizer
-from typing import Dict, List, Optional
+import csv
+import logging
+import random
+from typing import Dict, List, Optional, Tuple
 
-def load_and_tokenize_data(
-    train_file: str,
-    eval_file: Optional[str], # Made eval_file optional
-    tokenizer_name: str = "distilbert-base-uncased",
-    max_length: int = 128,
-    test_size: float = 0.1 # Optional: if eval_file is None, split train_file
-) -> DatasetDict:
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def _load_tsv(file_path: str) -> List[Dict[str, any]]:
+    """Loads a TSV file into a list of dictionaries."""
+    data = []
+    try:
+        with open(file_path, mode='r', encoding='utf-8', newline='') as file:
+            reader = csv.reader(file, delimiter='\t')
+            for i, row in enumerate(reader):
+                if len(row) == 2:
+                    text, label_str = row
+                    try:
+                        # Convert label to integer
+                        label = int(label_str)
+                        if label not in [0, 1]:
+                             logging.warning(f"Invalid label '{label_str}' in {file_path} at line {i+1}. Skipping row.")
+                             continue
+                        data.append({"text": text, "label": label})
+                    except ValueError:
+                        logging.warning(f"Invalid label format '{label_str}' in {file_path} at line {i+1}. Skipping row.")
+                else:
+                    logging.warning(f"Skipping malformed row (expected 2 columns, got {len(row)}) in {file_path} at line {i+1}: {row}")
+    except FileNotFoundError:
+        logging.error(f"Data file not found: {file_path}")
+        raise # Re-raise the exception after logging
+    except Exception as e:
+        logging.error(f"Error reading TSV file {file_path}: {e}")
+        raise # Re-raise the exception after logging
+    return data
+
+def load_data_from_tsv(
+    train_file: Optional[str],
+    eval_file: Optional[str],
+    test_size: float = 0.1,
+    random_seed: int = 42 # Added for reproducible splits
+) -> Dict[str, List[Dict[str, any]]]:
     """
-    Loads data from TSV files, tokenizes it, and returns a DatasetDict.
+    Loads data from TSV files and returns a dictionary of data splits.
 
     Args:
-        train_file: Path to the training TSV file (columns: text, label).
+        train_file: Path to the training TSV file (columns: text, label). Can be None if only eval is needed.
         eval_file: Path to the evaluation TSV file (columns: text, label).
-                    If None, the train_file will be split.
-        tokenizer_name: Name of the tokenizer model from Hugging Face Hub.
-        max_length: Maximum sequence length for tokenization.
+                   If None and train_file is provided, the train_file will be split.
         test_size: Fraction of training data to use for evaluation if eval_file is None.
+        random_seed: Seed for random shuffling during split.
 
     Returns:
-        A DatasetDict containing 'train' and 'test' (or 'validation') splits.
+        A dictionary containing 'train' and 'test' splits as lists of dictionaries.
+        Example: {'train': [{'text': '...', 'label': 1}, ...], 'test': [...]}
     """
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    datasets = {}
 
-    # Define function to tokenize data
-    def tokenize_function(examples: Dict[str, List]) -> Dict:
-        # Ensure 'text' column exists and handle potential None values if any
-        texts = [str(t) if t is not None else "" for t in examples["text"]]
-        # Tokenize, pad, and truncate
-        return tokenizer(texts, padding="max_length", truncation=True, max_length=max_length)
-
-    # Load data using datasets library
-    # Assumes TSV files have 'text' and 'label' columns (adjust if needed)
-    # Uses 'csv' format with tab separator
-    data_files = {}
     if train_file:
-        data_files["train"] = train_file
-    if eval_file:
-        data_files["test"] = eval_file # Use 'test' split name for consistency
+        logging.info(f"Loading training data from: {train_file}")
+        train_data = _load_tsv(train_file)
+        if not train_data:
+             logging.warning(f"No valid data loaded from training file: {train_file}")
+             # Decide how to handle empty train data - maybe raise error or return empty dict?
+             # For now, continue to allow loading only eval data if needed.
 
-    if not data_files:
+        if eval_file:
+            logging.info(f"Loading evaluation data from: {eval_file}")
+            eval_data = _load_tsv(eval_file)
+            if not eval_data:
+                 logging.warning(f"No valid data loaded from evaluation file: {eval_file}")
+            datasets['train'] = train_data
+            datasets['test'] = eval_data if eval_data else []
+        else:
+            # Split train_data if no eval_file is provided
+            if not train_data:
+                 raise ValueError("Cannot split data: Training data is empty or failed to load.")
+            logging.info(f"No evaluation file provided. Splitting train data with test_size={test_size}")
+            if not (0 < test_size < 1):
+                raise ValueError("test_size must be between 0 and 1")
+
+            # Stratified split is complex without libraries like sklearn, doing random split for simplicity
+            # For true stratified split, consider adding scikit-learn dependency back if needed
+            random.seed(random_seed)
+            random.shuffle(train_data)
+
+            split_idx = int(len(train_data) * (1 - test_size))
+            datasets['train'] = train_data[:split_idx]
+            datasets['test'] = train_data[split_idx:]
+            logging.info(f"Split complete. Train size: {len(datasets['train'])}, Test size: {len(datasets['test'])}")
+
+    elif eval_file:
+        # Only evaluation file provided
+        logging.info(f"Loading evaluation data only from: {eval_file}")
+        eval_data = _load_tsv(eval_file)
+        if not eval_data:
+             logging.warning(f"No valid data loaded from evaluation file: {eval_file}")
+        datasets['test'] = eval_data if eval_data else []
+        datasets['train'] = [] # Ensure 'train' key exists even if empty
+    else:
         raise ValueError("At least one data file (train_file or eval_file) must be provided.")
 
-    # Load dataset specifying column names if they differ from 'text', 'label'
-    # For TSV: column 0 is text, column 1 is label
-    raw_datasets = load_dataset(
-        "csv",
-        data_files=data_files,
-        delimiter="\t",
-        column_names=["text", "label"], # Explicitly name columns
-        skiprows=0 # Assuming no header row, adjust if header exists
-    )
-
-    # If no dedicated eval file, split the training data
-    if "test" not in raw_datasets and "train" in raw_datasets:
-        print(f"No evaluation file provided. Splitting train data with test_size={test_size}")
-        # Ensure labels are integers if they are read as strings
-        # Use cast_column for robustness before splitting
-        raw_datasets["train"] = raw_datasets["train"].cast_column("label", Value("int64"))
-        split_dataset = raw_datasets["train"].train_test_split(test_size=test_size, stratify_by_column="label")
-        raw_datasets["train"] = split_dataset["train"]
-        raw_datasets["test"] = split_dataset["test"]
-        print(f"Train size: {len(raw_datasets['train'])}, Test size: {len(raw_datasets['test'])}")
-
-
-    # Ensure labels are integers (might be read as strings from CSV)
-    # Use cast_column for robustness
-    if "train" in raw_datasets:
-         raw_datasets["train"] = raw_datasets["train"].cast_column("label", Value("int64"))
-    if "test" in raw_datasets:
-         raw_datasets["test"] = raw_datasets["test"].cast_column("label", Value("int64"))
-
-
-    # Tokenize datasets
-    tokenized_datasets = raw_datasets.map(tokenize_function, batched=True)
-
-    # Remove original text column to avoid conflicts with Trainer
-    tokenized_datasets = tokenized_datasets.remove_columns(["text"])
-    # Rename 'label' to 'labels' for Trainer compatibility
-    tokenized_datasets = tokenized_datasets.rename_column("label", "labels")
-    # Set format for PyTorch
-    tokenized_datasets.set_format("torch")
-
-    print("Data loading and tokenization complete.")
-    # Check if 'train' split exists before accessing features
-    if "train" in tokenized_datasets:
-        print(f"Dataset features: {tokenized_datasets['train'].features}")
-    elif "test" in tokenized_datasets: # Fallback to test if train doesn't exist (e.g., only eval file provided)
-        print(f"Dataset features (test split): {tokenized_datasets['test'].features}")
-
-
-    return tokenized_datasets
+    logging.info("Data loading complete.")
+    return datasets
 
 # Example usage (for testing purposes)
 if __name__ == "__main__":
-    # Create dummy files for testing
     import os
-    if not os.path.exists("dummy_data"):
-        os.makedirs("dummy_data")
-    with open("dummy_data/train.tsv", "w", encoding="utf-8") as f:
+    # Create dummy files for testing
+    dummy_dir = "dummy_data_csv"
+    if not os.path.exists(dummy_dir):
+        os.makedirs(dummy_dir)
+    train_path = os.path.join(dummy_dir, "train.tsv")
+    eval_path = os.path.join(dummy_dir, "eval.tsv")
+
+    with open(train_path, "w", encoding="utf-8") as f:
         f.write("This is human.\t1\n")
         f.write("This is machine.\t0\n")
         f.write("Another human sentence.\t1\n")
         f.write("Another machine sentence.\t0\n")
-    with open("dummy_data/eval.tsv", "w", encoding="utf-8") as f:
+        f.write("Bad row\tX\n") # Test bad label
+        f.write("Too many columns\t1\tExtra\n") # Test bad columns
+    with open(eval_path, "w", encoding="utf-8") as f:
         f.write("Test human.\t1\n")
         f.write("Test machine.\t0\n")
 
     try:
-        datasets_dict = load_and_tokenize_data(
-            train_file="dummy_data/train.tsv",
-            eval_file="dummy_data/eval.tsv"
+        print("\n--- Testing Load Both Files ---")
+        datasets_dict = load_data_from_tsv(
+            train_file=train_path,
+            eval_file=eval_path
         )
-        print("\nSample Train Batch:")
-        print(datasets_dict["train"][0])
-        print("\nSample Test Batch:")
-        print(datasets_dict["test"][0])
+        print(f"Train samples loaded: {len(datasets_dict.get('train', []))}")
+        print(f"Test samples loaded: {len(datasets_dict.get('test', []))}")
+        if datasets_dict.get('train'): print(f"First train sample: {datasets_dict['train'][0]}")
+        if datasets_dict.get('test'): print(f"First test sample: {datasets_dict['test'][0]}")
 
-        # Test splitting
-        print("\nTesting split functionality:")
-        datasets_dict_split = load_and_tokenize_data(
-            train_file="dummy_data/train.tsv",
+        print("\n--- Testing Split Functionality ---")
+        datasets_dict_split = load_data_from_tsv(
+            train_file=train_path,
             eval_file=None, # Trigger split
             test_size=0.5
         )
         print(f"Train split size: {len(datasets_dict_split['train'])}")
         print(f"Test split size: {len(datasets_dict_split['test'])}")
+        if datasets_dict_split.get('train'): print(f"First train sample (split): {datasets_dict_split['train'][0]}")
+        if datasets_dict_split.get('test'): print(f"First test sample (split): {datasets_dict_split['test'][0]}")
+
+        print("\n--- Testing Load Eval Only ---")
+        datasets_dict_eval = load_data_from_tsv(
+            train_file=None,
+            eval_file=eval_path
+        )
+        print(f"Train samples loaded: {len(datasets_dict_eval.get('train', []))}")
+        print(f"Test samples loaded: {len(datasets_dict_eval.get('test', []))}")
+        if datasets_dict_eval.get('test'): print(f"First test sample (eval only): {datasets_dict_eval['test'][0]}")
 
 
     finally:
         # Clean up dummy files
-        os.remove("dummy_data/train.tsv")
-        os.remove("dummy_data/eval.tsv")
-        os.rmdir("dummy_data")
+        print("\n--- Cleaning up dummy files ---")
+        try:
+            os.remove(train_path)
+            os.remove(eval_path)
+            os.rmdir(dummy_dir)
+            print("Cleanup complete.")
+        except OSError as e:
+            print(f"Error during cleanup: {e}")

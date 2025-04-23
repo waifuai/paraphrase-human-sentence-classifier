@@ -41,7 +41,7 @@ htmlcov/
 .nox/
 .coverage
 .coverage.*
-.cache
+.cache # General cache, keep this
 nosetests.xml
 coverage.xml
 *.cover
@@ -125,13 +125,8 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-# Hugging Face / Transformers cache & outputs
-.cache/huggingface/
-model_output/ # Default output directory from train script
-results/ # Common output dir name
-runs/ # Tensorboard runs
+# Evaluation results
+results/
 
 # Specific project files (if any large data/models shouldn't be tracked)
 # *.bin # Example if large model files are generated
-
-model_output_hf

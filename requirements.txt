@@ -1,11 +1,9 @@
 # Core ML Libraries
-torch # PyTorch backend
-transformers # Hugging Face models, tokenizers, trainer
-datasets # Hugging Face data loading/processing
-accelerate # Hugging Face utility for distributed training/inference
+google-generativeai # Google Gemini API client
 
 # Evaluation
 scikit-learn # For metrics like confusion matrix, precision, recall, f1
+tqdm # Progress bar
 
 # Testing
 pytest

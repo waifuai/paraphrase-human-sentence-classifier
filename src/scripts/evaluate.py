@@ -1,163 +1,201 @@
 #!/usr/bin/env python3
 """
-Evaluation Script for the Human/Paraphrase Sentence Classifier using Hugging Face Transformers.
+Evaluation Script for the Human/Machine Sentence Classifier using Google Gemini API.
 
-This script loads a trained model and tokenizer, runs predictions on an evaluation dataset,
-and computes various metrics including confusion matrix, accuracy, precision, recall, and F1-score.
+This script loads evaluation data, classifies each sentence using the Gemini API,
+and computes metrics including confusion matrix, accuracy, precision, recall, and F1-score.
 """
 
 import argparse
 import os
 import json
+import logging
+import time
 import numpy as np
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 
-# Ensure imports work correctly assuming 'src' is in PYTHONPATH
-from classifier.data import load_and_tokenize_data # Use the updated data loader
+# Use relative imports assuming 'src' is in PYTHONPATH or running as module
+from ..classifier.data import load_data_from_tsv
+from ..classifier.model import classify_with_gemini, DEFAULT_GEMINI_MODEL
 
-# Import necessary Hugging Face classes
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments
-import torch # Import torch to check for GPU availability
+# Attempt to import tqdm for progress bar
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None # Set to None if not installed
 
-def compute_metrics(pred):
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def compute_metrics(labels, preds):
     """
     Computes evaluation metrics from predictions.
-    (Same function as in train.py for consistency)
+    Modified to take lists of labels and predictions directly.
 
     Args:
-        pred: An EvalPrediction object containing predictions and label_ids.
+        labels: A list of true integer labels (0 or 1).
+        preds: A list of predicted integer labels (0 or 1).
 
     Returns:
         A dictionary containing accuracy, precision, recall, f1, and confusion matrix.
     """
-    labels = pred.label_ids
-    # Ensure predictions are valid before argmax
-    if pred.predictions is None or len(pred.predictions) == 0:
-        print("Warning: No predictions found in EvalPrediction object.")
-        return {'accuracy': 0, 'f1': 0, 'precision': 0, 'recall': 0, 'confusion_matrix': [[0,0],[0,0]]}
+    if not labels or not preds or len(labels) != len(preds):
+         logging.error("Invalid input for compute_metrics. Labels or preds empty or lengths differ.")
+         return {'accuracy': 0, 'f1': 0, 'precision': 0, 'recall': 0, 'confusion_matrix': [[0,0],[0,0]], 'support': 0}
 
-    preds = np.argmax(pred.predictions, axis=-1)
-
-    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary', zero_division=0)
+    precision, recall, f1, support_tuple = precision_recall_fscore_support(
+        labels, preds, average='binary', zero_division=0
+    )
     acc = accuracy_score(labels, preds)
     cm = confusion_matrix(labels, preds)
+    support = len(labels) # Total number of samples evaluated
 
-    # Ensure confusion matrix is 2x2, padding if necessary (e.g., if only one class predicted)
+    # Ensure confusion matrix is 2x2, padding if necessary
     if cm.shape == (1, 1):
-        if labels[0] == 0: # Only predicted/actual 0
+        # Determine which label was present based on the first label
+        present_label = labels[0]
+        if present_label == 0: # Only label 0 present/predicted
              cm_full = np.array([[cm[0,0], 0], [0, 0]])
-        else: # Only predicted/actual 1
+        else: # Only label 1 present/predicted
              cm_full = np.array([[0, 0], [0, cm[0,0]]])
         cm = cm_full
     elif cm.shape != (2, 2):
-         # Handle unexpected shapes if necessary, default to zero matrix
-         print(f"Warning: Unexpected confusion matrix shape {cm.shape}. Defaulting.")
+         # Handle unexpected shapes, default to zero matrix
+         logging.warning(f"Unexpected confusion matrix shape {cm.shape}. Defaulting.")
          cm = np.array([[0, 0], [0, 0]])
-
 
     return {
         'accuracy': acc,
         'f1': f1,
         'precision': precision,
         'recall': recall,
-        'confusion_matrix': cm.tolist() # Convert numpy array to list for JSON serialization
+        'confusion_matrix': cm.tolist(), # Convert numpy array to list for JSON
+        'support': support # Add total support count
     }
 
 def main(args):
     """
-    Main function to load model, run evaluation, and print metrics.
+    Main function to load data, run Gemini classification, evaluate, and save results.
     """
-    print("Starting evaluation process...")
-    print(f"Configuration: {args}")
+    logging.info("Starting evaluation process with Gemini API...")
+    logging.info(f"Configuration: {args}")
 
-    if not os.path.isdir(args.model_dir):
-        raise FileNotFoundError(f"Model directory not found: {args.model_dir}")
+    # --- 1. Load Evaluation Data ---
+    logging.info(f"Loading evaluation data from: {args.eval_file}")
+    try:
+        datasets = load_data_from_tsv(train_file=None, eval_file=args.eval_file)
+        eval_data = datasets.get('test', [])
+        if not eval_data:
+            logging.error(f"No evaluation data loaded from {args.eval_file}. Exiting.")
+            return
+    except Exception as e:
+        logging.error(f"Failed to load data: {e}")
+        return
 
-    # --- 1. Load Tokenizer and Model ---
-    print(f"Loading tokenizer and model from: {args.model_dir}")
-    # Use the same tokenizer name/path as the model was trained with
-    tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_dir)
+    logging.info(f"Evaluation data size: {len(eval_data)}")
 
-    # --- 2. Load and Tokenize Evaluation Data ---
-    print(f"Loading and tokenizing evaluation data from: {args.eval_file}")
-    # We only need the 'test' split for evaluation
-    # Pass None for train_file as we are only evaluating
-    tokenized_datasets = load_and_tokenize_data(
-        train_file=None, # No training file needed for evaluation
-        eval_file=args.eval_file,
-        tokenizer_name=args.model_dir, # Use loaded tokenizer's path/name
-        max_length=args.max_length
-    )
+    # --- 2. Run Classification with Gemini ---
+    logging.info(f"Running classification using Gemini model: {args.gemini_model_name}")
+    true_labels = []
+    predicted_labels = []
+    api_errors = 0
+    start_time = time.time()
 
-    if "test" not in tokenized_datasets:
-        raise ValueError(f"Could not load 'test' split from eval_file: {args.eval_file}")
+    # Use tqdm for progress bar if available
+    data_iterator = tqdm(eval_data, desc="Classifying") if tqdm else eval_data
 
-    eval_dataset = tokenized_datasets["test"]
-    print(f"Evaluation data size: {len(eval_dataset)}")
+    for i, item in enumerate(data_iterator):
+        text = item.get("text")
+        true_label = item.get("label")
 
-    # --- 3. Set up Trainer for Evaluation ---
-    # We use Trainer just for its convenient evaluate method
-    print("Setting up Trainer for evaluation...")
-    # Check for GPU availability
-    use_gpu = torch.cuda.is_available() and not args.force_cpu
-    print(f"Using GPU for evaluation: {use_gpu}")
+        if text is None or true_label is None:
+            logging.warning(f"Skipping invalid item at index {i}: {item}")
+            continue
 
-    # Minimal TrainingArguments needed for evaluation
-    training_args = TrainingArguments(
-        output_dir=args.model_dir, # Output dir isn't really used here, but required
-        per_device_eval_batch_size=args.per_device_eval_batch_size,
-        do_train=False,
-        do_eval=True,
-        report_to="none",
-        fp16=use_gpu,
-        # no_cuda=not use_gpu,
-    )
+        # Call Gemini API
+        predicted_label_str = classify_with_gemini(text, model_name=args.gemini_model_name)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        eval_dataset=eval_dataset,
-        compute_metrics=compute_metrics,
-        tokenizer=tokenizer, # Pass tokenizer
-    )
+        if predicted_label_str is not None:
+            try:
+                predicted_label = int(predicted_label_str)
+                true_labels.append(true_label)
+                predicted_labels.append(predicted_label)
+            except ValueError:
+                 logging.error(f"Gemini returned non-integer value '{predicted_label_str}' for text: '{text[:50]}...'")
+                 api_errors += 1
+        else:
+            # Handle API error or None response (e.g., unexpected format)
+            logging.warning(f"Failed to get valid classification for item {i}. Text: '{text[:50]}...'")
+            api_errors += 1
+            # Optional: Add a placeholder prediction (e.g., opposite of true label)
+            # or simply skip this sample for metric calculation. Skipping for now.
 
-    # --- 4. Run Evaluation ---
-    print("Running evaluation...")
-    eval_results = trainer.evaluate()
+        # Optional: Add delay between API calls to avoid rate limits
+        if args.delay > 0:
+            time.sleep(args.delay)
 
-    # --- 5. Print and Save Results ---
-    print("\n--- Evaluation Results ---")
+        # Print progress periodically if tqdm is not available
+        if not tqdm and (i + 1) % 50 == 0:
+             logging.info(f"Processed {i+1}/{len(eval_data)} items...")
+
+
+    end_time = time.time()
+    duration = end_time - start_time
+    logging.info(f"Classification finished in {duration:.2f} seconds.")
+    logging.info(f"Total items processed: {len(eval_data)}")
+    logging.info(f"Successful classifications: {len(predicted_labels)}")
+    logging.info(f"API errors/invalid responses: {api_errors}")
+
+    if not predicted_labels:
+        logging.error("No successful classifications were made. Cannot compute metrics.")
+        return
+
+    # --- 3. Compute Metrics ---
+    logging.info("Computing evaluation metrics...")
+    eval_results = compute_metrics(true_labels, predicted_labels)
+
+    # Add run information to results
+    eval_results['model_used'] = args.gemini_model_name
+    eval_results['eval_file'] = args.eval_file
+    eval_results['total_samples'] = len(eval_data)
+    eval_results['successful_classifications'] = len(predicted_labels)
+    eval_results['api_errors'] = api_errors
+    eval_results['duration_seconds'] = duration
+
+    # --- 4. Print and Save Results ---
+    print("\n--- Gemini Evaluation Results ---")
     # Pretty print the results
     for key, value in eval_results.items():
-        if key == "eval_confusion_matrix":
-            print(f"  Confusion Matrix:")
-            print(f"    TN: {value[0][0]}, FP: {value[0][1]}")
-            print(f"    FN: {value[1][0]}, TP: {value[1][1]}")
+        if key == "confusion_matrix":
+            print(f"  Confusion Matrix (TN, FP / FN, TP):")
+            print(f"    {value[0]}")
+            print(f"    {value[1]}")
+        elif isinstance(value, float):
+            print(f"  {key.replace('_', ' ').capitalize()}: {value:.4f}")
         else:
-            # Format floats nicely
-            if isinstance(value, float):
-                print(f"  {key.replace('eval_', '').capitalize()}: {value:.4f}")
-            else:
-                print(f"  {key.replace('eval_', '').capitalize()}: {value}")
+            print(f"  {key.replace('_', ' ').capitalize()}: {value}")
 
-    # Optionally save results to a file
-    output_eval_file = os.path.join(args.model_dir, "evaluation_results.json")
-    print(f"\nSaving evaluation results to: {output_eval_file}")
-    with open(output_eval_file, "w") as writer:
-        json.dump(eval_results, writer, indent=4)
+    # Ensure results directory exists
+    os.makedirs(args.output_dir, exist_ok=True)
+    output_eval_file = os.path.join(args.output_dir, "gemini_evaluation_results.json")
+    logging.info(f"\nSaving evaluation results to: {output_eval_file}")
+    try:
+        with open(output_eval_file, "w", encoding='utf-8') as writer:
+            json.dump(eval_results, writer, indent=4)
+    except Exception as e:
+        logging.error(f"Failed to save results to {output_eval_file}: {e}")
 
-    print("Evaluation complete.")
+    logging.info("Evaluation complete.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate a trained Hugging Face Transformer model for sentence classification.")
+    parser = argparse.ArgumentParser(description="Evaluate sentence classification using Google Gemini API.")
 
-    parser.add_argument("--model_dir", type=str, required=True, help="Directory containing the saved model and tokenizer.")
-    parser.add_argument("--eval_file", type=str, required=True, help="Path to the evaluation data TSV file.")
-    parser.add_argument("--max_length", type=int, default=128, help="Maximum sequence length for tokenization (should match training).")
-    parser.add_argument("--per_device_eval_batch_size", type=int, default=16, help="Batch size per device during evaluation.")
-    parser.add_argument("--force_cpu", action="store_true", help="Force evaluation on CPU even if GPU is available.")
+    parser.add_argument("--eval_file", type=str, required=True, help="Path to the evaluation data TSV file (text<tab>label).")
+    parser.add_argument("--gemini_model_name", type=str, default=DEFAULT_GEMINI_MODEL, help="Name of the Gemini model to use.")
+    parser.add_argument("--output_dir", type=str, default="results", help="Directory to save evaluation results.")
+    parser.add_argument("--delay", type=float, default=0.1, help="Optional delay (seconds) between API calls to avoid rate limits.")
+    # Removed args: --model_dir, --max_length, --per_device_eval_batch_size, --force_cpu
 
     args = parser.parse_args()
     main(args)
