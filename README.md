@@ -4,7 +4,7 @@ This project classifies whether a sentence is human-generated or machine-generat
 
 ## Overview
 
-The classifier sends sentences to a specified Google Gemini model (defaulting to `gemini-2.5-flash-preview-04-17`) via the `google-generativeai` Python library. A carefully crafted prompt instructs the model to return '1' for human-written text and '0' for machine-generated text. The project includes scripts for evaluation and basic data handling.
+The classifier sends sentences to a specified Google Gemini model (defaulting to `gemini-2.5-pro-preview-03-25`) via the `google-generativeai` Python library. A carefully crafted prompt instructs the model to return '1' for human-written text and '0' for machine-generated text. The project includes scripts for evaluation and basic data handling.
 
 ## Setup
 
@@ -95,7 +95,7 @@ To evaluate the classifier's performance on your dataset, run `src/scripts/evalu
 **Optional Arguments:**
 
 *   `--eval_file`: (Required) Path to your evaluation TSV file.
-*   `--gemini_model_name`: Specify a different Gemini model (default: `gemini-2.5-flash-preview-04-17`).
+*   `--gemini_model_name`: Specify a different Gemini model (default: `gemini-2.5-pro-preview-03-25`).
 *   `--output_dir`: Directory to save the evaluation results JSON file (default: `results`).
 *   `--delay`: Add a small delay (in seconds, e.g., `0.1`) between API calls to help avoid rate limits.
 
