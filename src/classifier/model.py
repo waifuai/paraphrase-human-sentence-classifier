@@ -20,7 +20,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Configuration ---
-DEFAULT_GEMINI_MODEL = "gemini-2.5-pro-preview-03-25"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-pro-preview-05-06"
 API_KEY_FILE_PATH = Path.home() / ".api-gemini" # Path to the API key file in home directory
 
 # --- Global variable for the initialized model ---
