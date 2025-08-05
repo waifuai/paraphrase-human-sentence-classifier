@@ -40,8 +40,16 @@ def compute_metrics(labels, preds):
         A dictionary containing accuracy, precision, recall, f1, and confusion matrix.
     """
     if not labels or not preds or len(labels) != len(preds):
-         logging.error("Invalid input for compute_metrics. Labels or preds empty or lengths differ.")
-         return {'accuracy': 0, 'f1': 0, 'precision': 0, 'recall': 0, 'confusion_matrix': [[0,0],[0,0]], 'support': 0}
+        logging.error("Invalid input for compute_metrics. Labels or preds empty or lengths differ.")
+        # Return well-formed defaults so callers relying on keys do not KeyError
+        return {
+            'accuracy': 0.0,
+            'f1': 0.0,
+            'precision': 0.0,
+            'recall': 0.0,
+            'confusion_matrix': [[0, 0], [0, 0]],
+            'support': 0
+        }
 
     precision, recall, f1, support_tuple = precision_recall_fscore_support(
         labels, preds, average='binary', zero_division=0

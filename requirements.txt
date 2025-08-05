@@ -1,9 +1,11 @@
-# Core ML Libraries
-google-generativeai # Google Gemini API client
+# Runtime dependencies (flexible for OSS consumers)
+
+# Google GenAI SDK (Client-centric API)
+google-genai~=1.28
 
 # Evaluation
 scikit-learn # For metrics like confusion matrix, precision, recall, f1
 tqdm # Progress bar
 
-# Testing
+# Testing (keep here for now; can be split to requirements-dev.txt later if desired)
 pytest

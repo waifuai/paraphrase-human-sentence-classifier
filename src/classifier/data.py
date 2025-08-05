@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def _load_tsv(file_path: str) -> List[Dict[str, any]]:
     """Loads a TSV file into a list of dictionaries."""
-    data = []
+    data: List[Dict[str, any]] = []
     try:
         with open(file_path, mode='r', encoding='utf-8', newline='') as file:
             reader = csv.reader(file, delimiter='\t')
@@ -22,11 +22,10 @@ def _load_tsv(file_path: str) -> List[Dict[str, any]]:
                 if len(row) == 2:
                     text, label_str = row
                     try:
-                        # Convert label to integer
                         label = int(label_str)
-                        if label not in [0, 1]:
-                             logging.warning(f"Invalid label '{label_str}' in {file_path} at line {i+1}. Skipping row.")
-                             continue
+                        if label not in (0, 1):
+                            logging.warning(f"Invalid label '{label_str}' in {file_path} at line {i+1}. Skipping row.")
+                            continue
                         data.append({"text": text, "label": label})
                     except ValueError:
                         logging.warning(f"Invalid label format '{label_str}' in {file_path} at line {i+1}. Skipping row.")
@@ -34,10 +33,7 @@ def _load_tsv(file_path: str) -> List[Dict[str, any]]:
                     logging.warning(f"Skipping malformed row (expected 2 columns, got {len(row)}) in {file_path} at line {i+1}: {row}")
     except FileNotFoundError:
         logging.error(f"Data file not found: {file_path}")
-        raise # Re-raise the exception after logging
-    except Exception as e:
-        logging.error(f"Error reading TSV file {file_path}: {e}")
-        raise # Re-raise the exception after logging
+        raise
     return data
 
 def load_data_from_tsv(
@@ -65,28 +61,19 @@ def load_data_from_tsv(
     if train_file:
         logging.info(f"Loading training data from: {train_file}")
         train_data = _load_tsv(train_file)
-        if not train_data:
-             logging.warning(f"No valid data loaded from training file: {train_file}")
-             # Decide how to handle empty train data - maybe raise error or return empty dict?
-             # For now, continue to allow loading only eval data if needed.
-
         if eval_file:
             logging.info(f"Loading evaluation data from: {eval_file}")
             eval_data = _load_tsv(eval_file)
-            if not eval_data:
-                 logging.warning(f"No valid data loaded from evaluation file: {eval_file}")
             datasets['train'] = train_data
-            datasets['test'] = eval_data if eval_data else []
+            datasets['test'] = eval_data
         else:
             # Split train_data if no eval_file is provided
             if not train_data:
-                 raise ValueError("Cannot split data: Training data is empty or failed to load.")
+                raise FileNotFoundError("Cannot split data: Training data is empty or failed to load.")
             logging.info(f"No evaluation file provided. Splitting train data with test_size={test_size}")
             if not (0 < test_size < 1):
                 raise ValueError("test_size must be between 0 and 1")
 
-            # Stratified split is complex without libraries like sklearn, doing random split for simplicity
-            # For true stratified split, consider adding scikit-learn dependency back if needed
             random.seed(random_seed)
             random.shuffle(train_data)
 
@@ -99,12 +86,11 @@ def load_data_from_tsv(
         # Only evaluation file provided
         logging.info(f"Loading evaluation data only from: {eval_file}")
         eval_data = _load_tsv(eval_file)
-        if not eval_data:
-             logging.warning(f"No valid data loaded from evaluation file: {eval_file}")
-        datasets['test'] = eval_data if eval_data else []
-        datasets['train'] = [] # Ensure 'train' key exists even if empty
+        datasets['test'] = eval_data
+        datasets['train'] = []  # Ensure 'train' key exists even if empty
     else:
-        raise ValueError("At least one data file (train_file or eval_file) must be provided.")
+        # Mirror test expectation: raise when neither provided
+        raise FileNotFoundError("At least one data file (train_file or eval_file) must be provided.")
 
     logging.info("Data loading complete.")
     return datasets

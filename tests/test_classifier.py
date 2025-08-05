@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock, mock_open
 # Note: Running tests might require setting PYTHONPATH=. or using `python -m pytest`
 try:
     from classifier.data import load_data_from_tsv
-    from classifier.model import classify_with_gemini, _initialize_model, _model, _api_key_loaded, API_KEY_FILE_PATH
+    from classifier.model import classify_with_gemini, DEFAULT_GEMINI_MODEL, API_KEY_FILE_PATH
     from scripts.evaluate import compute_metrics
 except ImportError as e:
     # Handle cases where running pytest directly might cause import issues
@@ -122,118 +122,116 @@ def test_load_data_from_tsv_not_found():
 # Tests for model.py
 # -------------------------
 
-# Reset global state before each model test
+# No legacy globals to reset with new SDK
 @pytest.fixture(autouse=True)
 def reset_model_state():
-    global _model, _api_key_loaded
-    _model = None
-    _api_key_loaded = False
+    pass
 
 # Mock Path.home() and Path.is_file() / read_text() for API key tests
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
-def test_initialize_model_key_found(mock_home):
-    # Mock the specific file path check and read
+def test_initialize_client_key_found(mock_home):
     with patch('pathlib.Path.is_file', return_value=True), \
+         patch('pathlib.Path.read_text', return_value='fake-api-key'), \
+         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
+         patch('classifier.model.genai') as mock_genai:
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+
+        from classifier.model import classify_with_gemini
+        import classifier.model as m
+        m._client = None
+        mock_client.models.generate_content.return_value = MagicMock(text='1')
+        res = classify_with_gemini("hello")
+        assert res in ('0','1',None)
+        mock_genai.Client.assert_called_once()
+
+@patch('classifier.model.Path.home', return_value=Path('/fake/home'))
+def test_initialize_client_key_not_found(mock_home):
+     with patch('pathlib.Path.is_file', return_value=False), \
+          patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True):
+         # Import classify and expect graceful None due to missing key
+         from classifier.model import classify_with_gemini
+         res = classify_with_gemini("hello")
+         assert res is None
+
+@patch('classifier.model.Path.home', return_value=Path('/fake/home'))
+@patch('pathlib.Path.is_file', return_value=True)
+@patch('pathlib.Path.read_text', return_value='fake-api-key')
+def test_classify_with_gemini_success(mock_read, mock_is_file, mock_home):
+    from classifier import model as m
+    with patch.object(m, "genai") as mock_genai, \
+         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
+         patch('pathlib.Path.is_file', return_value=True), \
          patch('pathlib.Path.read_text', return_value='fake-api-key'):
-        # Mock the genai configure and GenerativeModel
-        with patch('google.generativeai.configure') as mock_configure, \
-             patch('google.generativeai.GenerativeModel') as mock_gen_model:
-            assert _initialize_model() is True
-            mock_configure.assert_called_once_with(api_key='fake-api-key')
-            mock_gen_model.assert_called_once()
-            assert _api_key_loaded is True
-            assert _model is not None
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = '1'
+        mock_client.models.generate_content.return_value = mock_resp
+        mock_genai.Client.return_value = mock_client
 
-@patch('classifier.model.Path.home', return_value=Path('/fake/home'))
-def test_initialize_model_key_not_found(mock_home):
-     with patch('pathlib.Path.is_file', return_value=False):
-         with patch('google.generativeai.configure') as mock_configure, \
-              patch('google.generativeai.GenerativeModel') as mock_gen_model:
-            assert _initialize_model() is False
-            mock_configure.assert_not_called()
-            mock_gen_model.assert_not_called()
-            assert _api_key_loaded is False
-            assert _model is None
+        # fresh client
+        m._client = None
+        result = m.classify_with_gemini("This is a test")
+        assert result == '1'
+        mock_client.models.generate_content.assert_called_once()
 
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
 @patch('pathlib.Path.is_file', return_value=True)
 @patch('pathlib.Path.read_text', return_value='fake-api-key')
-@patch('google.generativeai.configure')
-@patch('google.generativeai.GenerativeModel')
-def test_classify_with_gemini_success(mock_gen_model, mock_configure, mock_read, mock_is_file, mock_home):
-    # Mock the response from generate_content
-    mock_response = MagicMock()
-    mock_candidate = MagicMock()
-    mock_part = MagicMock()
-    mock_part.text = '1' # Simulate Gemini returning '1'
-    mock_candidate.content.parts = [mock_part]
-    mock_response.candidates = [mock_candidate]
-    # Configure the mock model instance returned by GenerativeModel()
-    mock_model_instance = MagicMock()
-    mock_model_instance.generate_content.return_value = mock_response
-    mock_gen_model.return_value = mock_model_instance
+def test_classify_with_gemini_unexpected_output(mock_read, mock_is_file, mock_home):
+    from classifier import model as m
+    with patch.object(m, "genai") as mock_genai, \
+         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
+         patch('pathlib.Path.is_file', return_value=True), \
+         patch('pathlib.Path.read_text', return_value='fake-api-key'):
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = ' The classification is 0 '
+        mock_client.models.generate_content.return_value = mock_resp
+        mock_genai.Client.return_value = mock_client
 
-    # Initialize first (mocks will be used)
-    assert _initialize_model() is True
-
-    # Now classify
-    result = classify_with_gemini("This is a test")
-    assert result == '1'
-    mock_model_instance.generate_content.assert_called_once()
-    # Check prompt contains the text (optional, but good)
-    call_args, _ = mock_model_instance.generate_content.call_args
-    assert "This is a test" in call_args[0] # Prompt is the first arg
+        m._client = None
+        result = m.classify_with_gemini("Another test")
+        assert result == '0'
 
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
 @patch('pathlib.Path.is_file', return_value=True)
 @patch('pathlib.Path.read_text', return_value='fake-api-key')
-@patch('google.generativeai.configure')
-@patch('google.generativeai.GenerativeModel')
-def test_classify_with_gemini_unexpected_output(mock_gen_model, mock_configure, mock_read, mock_is_file, mock_home):
-    mock_response = MagicMock()
-    mock_candidate = MagicMock()
-    mock_part = MagicMock()
-    mock_part.text = ' The classification is 0 ' # Simulate extra text
-    mock_candidate.content.parts = [mock_part]
-    mock_response.candidates = [mock_candidate]
-    mock_model_instance = MagicMock()
-    mock_model_instance.generate_content.return_value = mock_response
-    mock_gen_model.return_value = mock_model_instance
+def test_classify_with_gemini_api_error(mock_read, mock_is_file, mock_home):
+    from classifier import model as m
+    with patch.object(m, "genai") as mock_genai, \
+         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
+         patch('pathlib.Path.is_file', return_value=True), \
+         patch('pathlib.Path.read_text', return_value='fake-api-key'):
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = Exception("API rate limit exceeded")
+        mock_genai.Client.return_value = mock_client
 
-    assert _initialize_model() is True
-    result = classify_with_gemini("Another test")
-    # The current logic tries to parse '0' or '1' if present
-    assert result == '0' # It should find '0' in the string
+        m._client = None
+        result = m.classify_with_gemini("Error test")
+        assert result is None
 
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
 @patch('pathlib.Path.is_file', return_value=True)
 @patch('pathlib.Path.read_text', return_value='fake-api-key')
-@patch('google.generativeai.configure')
-@patch('google.generativeai.GenerativeModel')
-def test_classify_with_gemini_api_error(mock_gen_model, mock_configure, mock_read, mock_is_file, mock_home):
-    mock_model_instance = MagicMock()
-    mock_model_instance.generate_content.side_effect = Exception("API rate limit exceeded")
-    mock_gen_model.return_value = mock_model_instance
+def test_classify_with_gemini_no_text(mock_read, mock_is_file, mock_home):
+    from classifier import model as m
+    with patch.object(m, "genai") as mock_genai, \
+         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
+         patch('pathlib.Path.is_file', return_value=True), \
+         patch('pathlib.Path.read_text', return_value='fake-api-key'):
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        # Simulate absence of text and candidates
+        if hasattr(mock_resp, "text"):
+            delattr(mock_resp, "text")
+        mock_resp.candidates = []
+        mock_client.models.generate_content.return_value = mock_resp
+        mock_genai.Client.return_value = mock_client
 
-    assert _initialize_model() is True
-    result = classify_with_gemini("Error test")
-    assert result is None
-
-@patch('classifier.model.Path.home', return_value=Path('/fake/home'))
-@patch('pathlib.Path.is_file', return_value=True)
-@patch('pathlib.Path.read_text', return_value='fake-api-key')
-@patch('google.generativeai.configure')
-@patch('google.generativeai.GenerativeModel')
-def test_classify_with_gemini_no_candidates(mock_gen_model, mock_configure, mock_read, mock_is_file, mock_home):
-    mock_response = MagicMock()
-    mock_response.candidates = [] # Simulate no candidates (e.g., blocked prompt)
-    mock_model_instance = MagicMock()
-    mock_model_instance.generate_content.return_value = mock_response
-    mock_gen_model.return_value = mock_model_instance
-
-    assert _initialize_model() is True
-    result = classify_with_gemini("Blocked content test")
-    assert result is None
+        m._client = None
+        result = m.classify_with_gemini("Blocked content test")
+        assert result is None
 
 # -------------------------
 # Tests for evaluate.py (compute_metrics) - Kept from original

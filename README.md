@@ -1,10 +1,10 @@
-# Human vs. Machine Sentence Classifier (Google Gemini API)
+# Human vs. Machine Sentence Classifier (Google GenAI SDK)
 
-This project classifies whether a sentence is human-generated or machine-generated (e.g., paraphrased) using the Google Gemini API.
+This project classifies whether a sentence is human-generated or machine-generated using the Google GenAI SDK.
 
 ## Overview
 
-The classifier sends sentences to a specified Google Gemini model (defaulting to `gemini-2.5-pro`) via the `google-generativeai` Python library. A carefully crafted prompt instructs the model to return '1' for human-written text and '0' for machine-generated text. The project includes scripts for evaluation and basic data handling.
+The classifier sends sentences to a specified Google Gemini model (defaulting to `gemini-2.5-pro`) via the new Google GenAI SDK using a central client. A carefully crafted prompt instructs the model to return '1' for human-written text and '0' for machine-generated text. The project includes scripts for evaluation and basic data handling.
 
 ## Setup
 
