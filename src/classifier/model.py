@@ -24,16 +24,48 @@ except Exception:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Configuration ---
-DEFAULT_GEMINI_MODEL = "gemini-2.5-pro"
+# Allow default model names to be overridden by user home dotfiles:
+#   ~/.model-gemini        -> overrides DEFAULT_GEMINI_MODEL
+#   ~/.model-openrouter    -> overrides DEFAULT_OPENROUTER_MODEL
 API_KEY_FILE_PATH = Path.home() / ".api-gemini"  # Path to the API key file in home directory
+GEMINI_MODEL_FILE_PATH = Path.home() / ".model-gemini"
 
 # OpenRouter configuration
-DEFAULT_OPENROUTER_MODEL = "openrouter/horizon-beta"
 OPENROUTER_API_KEY_FILE_PATH = Path.home() / ".api-openrouter"
+OPENROUTER_MODEL_FILE_PATH = Path.home() / ".model-openrouter"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# Hardcoded fallbacks if no override files are present
+_DEFAULT_GEMINI_MODEL_FALLBACK = "gemini-2.5-pro"
+_DEFAULT_OPENROUTER_MODEL_FALLBACK = "openrouter/horizon-beta"
 
 # --- Global state ---
 _client: Optional["genai.Client"] = None
+
+def _read_text_file(path: Path) -> Optional[str]:
+    """Read and strip text from a file path if it exists; return None on failure or empty."""
+    try:
+        if path.is_file():
+            content = path.read_text(encoding="utf-8").strip()
+            return content or None
+        return None
+    except Exception as e:
+        logging.error(f"Failed to read text from {path}: {e}")
+        return None
+
+def _resolve_gemini_default_model() -> str:
+    """Resolve default Gemini model name from ~/.model-gemini, fallback to hardcoded."""
+    override = _read_text_file(GEMINI_MODEL_FILE_PATH)
+    return override if override else _DEFAULT_GEMINI_MODEL_FALLBACK
+
+def _resolve_openrouter_default_model() -> str:
+    """Resolve default OpenRouter model name from ~/.model-openrouter, fallback to hardcoded."""
+    override = _read_text_file(OPENROUTER_MODEL_FILE_PATH)
+    return override if override else _DEFAULT_OPENROUTER_MODEL_FALLBACK
+
+# Export resolved defaults so callers (e.g., CLI) can import them
+DEFAULT_GEMINI_MODEL = _resolve_gemini_default_model()
+DEFAULT_OPENROUTER_MODEL = _resolve_openrouter_default_model()
 
 def _shared_prompt(text: str) -> str:
     """Generate the shared classification prompt used for both providers."""

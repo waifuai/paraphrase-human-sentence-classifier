@@ -89,8 +89,8 @@ To use OpenRouter instead of Gemini:
 **Optional Arguments:**
 - `--eval_file`: (Required) Path to your evaluation TSV file.
 - `--provider`: Choose `gemini` or `openrouter` (default: `gemini`).
-- `--openrouter_model_name`: OpenRouter model (default: `openrouter/horizon-beta`).
-- `--gemini_model_name`: Gemini model (default: `gemini-2.5-pro`).
+- `--openrouter_model_name`: OpenRouter model (default: value from ~/.model-openrouter if present, else `openrouter/horizon-beta`).
+- `--gemini_model_name`: Gemini model (default: value from ~/.model-gemini if present, else `gemini-2.5-pro`).
 - `--output_dir`: Directory to save the evaluation results JSON (default: `results`).
 - `--delay`: Optional delay between API calls to mitigate rate limits (default: 0.1s).
 
@@ -118,6 +118,10 @@ The script:
 - Costs and rate limits apply. Use `--delay` to mitigate.
 - Experiment with models and prompt for accuracy.
 - Store keys securely in `~/.api-gemini` and `~/.api-openrouter` with appropriate permissions.
+- To override default model names without passing CLI flags, create plain-text files in your home directory:
+  - `~/.model-gemini` containing the Gemini model name (one line).
+  - `~/.model-openrouter` containing the OpenRouter model name (one line).
+  These take effect automatically as defaults while CLI flags still take precedence when provided.
 
 ## Future Improvements
 
