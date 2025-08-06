@@ -22,17 +22,8 @@ try:
     )
     from scripts.evaluate import compute_metrics
 except ImportError as e:
-    # Handle cases where running pytest directly might cause import issues
-    # This is a common issue depending on how pytest discovers tests vs how modules are run
-    print(f"Import Error: {e}. Ensure PYTHONPATH includes 'src' or run with 'python -m pytest'.")
-    # Define dummy functions/classes to allow tests to be collected even if imports fail initially
-    def load_data_from_tsv(*args, **kwargs): return {'train': [], 'test': []}
-    def classify_with_gemini(*args, **kwargs): return None
-    def compute_metrics(*args, **kwargs): return {}
-    _model = None
-    _api_key_loaded = False
-    API_KEY_FILE_PATH = Path.home() / ".api-gemini"
-    def _initialize_model(*args, **kwargs): return False
+    # Force test failure on import problems so we can fix the root cause
+    raise
 
 
 # -------------------------

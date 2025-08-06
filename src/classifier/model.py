@@ -63,13 +63,17 @@ def _read_key_file() -> Optional[str]:
         return None
 
 def _resolve_api_key() -> Optional[str]:
-    """Resolve API key using env first, fallback to ~/.api-gemini."""
-    # Respect explicit empty to simulate 'no key' in tests
-    if "GEMINI_API_KEY" in os.environ and os.environ.get("GEMINI_API_KEY", "").strip() == "":
-        return None
-    if "GOOGLE_API_KEY" in os.environ and os.environ.get("GOOGLE_API_KEY", "").strip() == "":
-        return None
-    env_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    """Resolve API key using env first, fallback to ~/.api-gemini.
+
+    Behavior:
+    - If an env var is set and non-empty, use it.
+    - If env var is set but empty, treat as unset and fall back to file.
+    - If none available, return None.
+    """
+    env_key = os.getenv("GEMINI_API_KEY")
+    if env_key and env_key.strip():
+        return env_key.strip()
+    env_key = os.getenv("GOOGLE_API_KEY")
     if env_key and env_key.strip():
         return env_key.strip()
     return _read_key_file()
@@ -160,9 +164,12 @@ def _read_openrouter_key_file() -> Optional[str]:
         return None
 
 def _resolve_openrouter_api_key() -> Optional[str]:
-    """Resolve OpenRouter API key using env first, fallback to ~/.api-openrouter."""
-    if "OPENROUTER_API_KEY" in os.environ and os.environ.get("OPENROUTER_API_KEY", "").strip() == "":
-        return None
+    """Resolve OpenRouter API key using env first, fallback to ~/.api-openrouter.
+
+    Behavior:
+    - Use OPENROUTER_API_KEY if present and non-empty.
+    - If present but empty, ignore and fall back to key file.
+    """
     env_key = os.getenv("OPENROUTER_API_KEY")
     if env_key and env_key.strip():
         return env_key.strip()

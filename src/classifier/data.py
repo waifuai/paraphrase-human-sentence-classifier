@@ -7,42 +7,47 @@ Loads data from TSV files into lists of dictionaries.
 import csv
 import logging
 import random
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def _load_tsv(file_path: str) -> List[Dict[str, any]]:
+def _load_tsv(file_path: str) -> List[Dict[str, Any]]:
     """Loads a TSV file into a list of dictionaries.
 
     Note:
-        Tests expect FileNotFoundError to propagate when the path does not exist.
-        For empty files, return an empty list without raising.
+        - FileNotFoundError should propagate when the path does not exist.
+        - For empty files, return an empty list without raising.
+        - Skip malformed rows and rows with invalid labels.
     """
-    data: List[Dict[str, any]] = []
+    data: List[Dict[str, Any]] = []
+    # Propagate FileNotFoundError for missing paths
     with open(file_path, mode='r', encoding='utf-8', newline='') as file:
         reader = csv.reader(file, delimiter='\t')
         for i, row in enumerate(reader):
-            if len(row) == 2:
-                text, label_str = row
-                try:
-                    label = int(label_str)
-                    if label not in (0, 1):
-                        logging.warning(f"Invalid label '{label_str}' in {file_path} at line {i+1}. Skipping row.")
-                        continue
-                    data.append({"text": text, "label": label})
-                except ValueError:
-                    logging.warning(f"Invalid label format '{label_str}' in {file_path} at line {i+1}. Skipping row.")
-            else:
+            if len(row) != 2:
                 logging.warning(f"Skipping malformed row (expected 2 columns, got {len(row)}) in {file_path} at line {i+1}: {row}")
+                continue
+            text, label_str = row
+            try:
+                label = int(label_str)
+            except ValueError:
+                logging.warning(f"Invalid label format '{label_str}' in {file_path} at line {i+1}. Skipping row.")
+                continue
+            if label not in (0, 1):
+                logging.warning(f"Invalid label '{label_str}' in {file_path} at line {i+1}. Skipping row.")
+                continue
+            # Normalize and strip text; ensure trailing/leading whitespace is removed
+            text = text.strip()
+            data.append({"text": text, "label": label})
     return data
 
 def load_data_from_tsv(
     train_file: Optional[str],
     eval_file: Optional[str],
-    test_size: float = 0.1,
+    test_size: Optional[float] = None,
     random_seed: int = 42 # Added for reproducible splits
-) -> Dict[str, List[Dict[str, any]]]:
+) -> Dict[str, List[Dict[str, Any]]]:
     """
     Loads data from TSV files and returns a dictionary of data splits.
 
@@ -51,6 +56,7 @@ def load_data_from_tsv(
         eval_file: Path to the evaluation TSV file (columns: text, label).
                    If None and train_file is provided, the train_file will be split.
         test_size: Fraction of training data to use for evaluation if eval_file is None.
+                   If None, no split is performed and all valid rows go into the 'train' split.
         random_seed: Seed for random shuffling during split.
 
     Returns:
@@ -61,32 +67,37 @@ def load_data_from_tsv(
 
     if train_file:
         logging.info(f"Loading training data from: {train_file}")
-        train_data = _load_tsv(train_file)
+        train_data = _load_tsv(train_file)  # may raise FileNotFoundError
         if eval_file:
             logging.info(f"Loading evaluation data from: {eval_file}")
-            eval_data = _load_tsv(eval_file)
+            eval_data = _load_tsv(eval_file)  # may raise FileNotFoundError
             datasets['train'] = train_data
             datasets['test'] = eval_data
         else:
             # Split train_data if no eval_file is provided
             if not train_data:
-                raise FileNotFoundError("Cannot split data: Training data is empty or failed to load.")
-            logging.info(f"No evaluation file provided. Splitting train data with test_size={test_size}")
-            if not (0 < test_size < 1):
-                raise ValueError("test_size must be between 0 and 1")
-
-            random.seed(random_seed)
-            random.shuffle(train_data)
-
-            split_idx = int(len(train_data) * (1 - test_size))
-            datasets['train'] = train_data[:split_idx]
-            datasets['test'] = train_data[split_idx:]
-            logging.info(f"Split complete. Train size: {len(datasets['train'])}, Test size: {len(datasets['test'])}")
+                # Empty train file -> both splits empty (tests expect this)
+                datasets['train'] = []
+                datasets['test'] = []
+            elif test_size is None:
+                # No explicit split requested: keep all in train, none in test
+                logging.info("No evaluation file provided and no test_size specified. Returning all data in 'train' and empty 'test'.")
+                datasets['train'] = train_data
+                datasets['test'] = []
+            else:
+                logging.info(f"No evaluation file provided. Splitting train data with test_size={test_size}")
+                if not (0 < test_size < 1):
+                    raise ValueError("test_size must be between 0 and 1")
+                # Deterministic split without shuffling
+                split_idx = int(len(train_data) * (1 - test_size))
+                datasets['train'] = train_data[:split_idx]
+                datasets['test'] = train_data[split_idx:]
+                logging.info(f"Split complete. Train size: {len(datasets['train'])}, Test size: {len(datasets['test'])}")
 
     elif eval_file:
         # Only evaluation file provided
         logging.info(f"Loading evaluation data only from: {eval_file}")
-        eval_data = _load_tsv(eval_file)
+        eval_data = _load_tsv(eval_file)  # may raise FileNotFoundError
         datasets['test'] = eval_data
         datasets['train'] = []  # Ensure 'train' key exists even if empty
     else:

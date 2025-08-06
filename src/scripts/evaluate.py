@@ -14,14 +14,26 @@ import time
 import numpy as np
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 
-# Use relative imports assuming 'src' is in PYTHONPATH or running as module
-from ..classifier.data import load_data_from_tsv
-from ..classifier.model import (
-    classify_with_gemini,
-    DEFAULT_GEMINI_MODEL,
-    classify_with_openrouter,
-    DEFAULT_OPENROUTER_MODEL,
-)
+# Support both execution contexts:
+# - When run as a module/package with PYTHONPATH including 'src' (pytest.ini sets pythonpath = . src)
+# - When imported directly by tests
+try:
+    from classifier.data import load_data_from_tsv
+    from classifier.model import (
+        classify_with_gemini,
+        DEFAULT_GEMINI_MODEL,
+        classify_with_openrouter,
+        DEFAULT_OPENROUTER_MODEL,
+    )
+except Exception:
+    # Fallback for environments resolving relative imports within package context
+    from ..classifier.data import load_data_from_tsv  # type: ignore
+    from ..classifier.model import (  # type: ignore
+        classify_with_gemini,
+        DEFAULT_GEMINI_MODEL,
+        classify_with_openrouter,
+        DEFAULT_OPENROUTER_MODEL,
+    )
 
 # Attempt to import tqdm for progress bar
 try:
