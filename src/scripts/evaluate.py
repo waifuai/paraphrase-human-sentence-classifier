@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Evaluation Script for the Human/Machine Sentence Classifier using Google Gemini API.
+Evaluation Script for the Human/Machine Sentence Classifier using Google Gemini API or OpenRouter.
 
-This script loads evaluation data, classifies each sentence using the Gemini API,
+This script loads evaluation data, classifies each sentence using the selected provider,
 and computes metrics including confusion matrix, accuracy, precision, recall, and F1-score.
 """
 
@@ -16,7 +16,12 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, con
 
 # Use relative imports assuming 'src' is in PYTHONPATH or running as module
 from ..classifier.data import load_data_from_tsv
-from ..classifier.model import classify_with_gemini, DEFAULT_GEMINI_MODEL
+from ..classifier.model import (
+    classify_with_gemini,
+    DEFAULT_GEMINI_MODEL,
+    classify_with_openrouter,
+    DEFAULT_OPENROUTER_MODEL,
+)
 
 # Attempt to import tqdm for progress bar
 try:
@@ -30,18 +35,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 def compute_metrics(labels, preds):
     """
     Computes evaluation metrics from predictions.
-    Modified to take lists of labels and predictions directly.
-
-    Args:
-        labels: A list of true integer labels (0 or 1).
-        preds: A list of predicted integer labels (0 or 1).
-
-    Returns:
-        A dictionary containing accuracy, precision, recall, f1, and confusion matrix.
     """
-    if not labels or not preds or len(labels) != len(preds):
+    if labels is None or preds is None or len(labels) != len(preds):
         logging.error("Invalid input for compute_metrics. Labels or preds empty or lengths differ.")
-        # Return well-formed defaults so callers relying on keys do not KeyError
         return {
             'accuracy': 0.0,
             'f1': 0.0,
@@ -51,41 +47,36 @@ def compute_metrics(labels, preds):
             'support': 0
         }
 
-    precision, recall, f1, support_tuple = precision_recall_fscore_support(
+    precision, recall, f1, _ = precision_recall_fscore_support(
         labels, preds, average='binary', zero_division=0
     )
     acc = accuracy_score(labels, preds)
-    cm = confusion_matrix(labels, preds)
-    support = len(labels) # Total number of samples evaluated
+    cm = confusion_matrix(labels, preds, labels=[0,1])
 
-    # Ensure confusion matrix is 2x2, padding if necessary
-    if cm.shape == (1, 1):
-        # Determine which label was present based on the first label
-        present_label = labels[0]
-        if present_label == 0: # Only label 0 present/predicted
-             cm_full = np.array([[cm[0,0], 0], [0, 0]])
-        else: # Only label 1 present/predicted
-             cm_full = np.array([[0, 0], [0, cm[0,0]]])
-        cm = cm_full
-    elif cm.shape != (2, 2):
-         # Handle unexpected shapes, default to zero matrix
-         logging.warning(f"Unexpected confusion matrix shape {cm.shape}. Defaulting.")
-         cm = np.array([[0, 0], [0, 0]])
+    # Guarantee 2x2 matrix
+    if cm.shape != (2, 2):
+        cm_fixed = np.zeros((2, 2), dtype=int)
+        # Map existing dims into fixed if necessary
+        try:
+            cm_fixed[:cm.shape[0], :cm.shape[1]] = cm
+            cm = cm_fixed
+        except Exception:
+            cm = np.array([[0, 0], [0, 0]])
 
     return {
-        'accuracy': acc,
-        'f1': f1,
-        'precision': precision,
-        'recall': recall,
-        'confusion_matrix': cm.tolist(), # Convert numpy array to list for JSON
-        'support': support # Add total support count
+        'accuracy': float(acc),
+        'f1': float(f1),
+        'precision': float(precision),
+        'recall': float(recall),
+        'confusion_matrix': cm.tolist(),
+        'support': int(len(labels))
     }
 
 def main(args):
     """
-    Main function to load data, run Gemini classification, evaluate, and save results.
+    Main function to load data, run classification, evaluate, and save results.
     """
-    logging.info("Starting evaluation process with Gemini API...")
+    logging.info("Starting evaluation process...")
     logging.info(f"Configuration: {args}")
 
     # --- 1. Load Evaluation Data ---
@@ -102,8 +93,11 @@ def main(args):
 
     logging.info(f"Evaluation data size: {len(eval_data)}")
 
-    # --- 2. Run Classification with Gemini ---
-    logging.info(f"Running classification using Gemini model: {args.gemini_model_name}")
+    # --- 2. Run Classification with selected provider ---
+    if args.provider == "gemini":
+        logging.info(f"Running classification using Gemini model: {args.gemini_model_name}")
+    else:
+        logging.info(f"Running classification using OpenRouter model: {args.openrouter_model_name}")
     true_labels = []
     predicted_labels = []
     api_errors = 0
@@ -120,8 +114,11 @@ def main(args):
             logging.warning(f"Skipping invalid item at index {i}: {item}")
             continue
 
-        # Call Gemini API
-        predicted_label_str = classify_with_gemini(text, model_name=args.gemini_model_name)
+        # Call provider API
+        if args.provider == "gemini":
+            predicted_label_str = classify_with_gemini(text, model_name=args.gemini_model_name)
+        else:
+            predicted_label_str = classify_with_openrouter(text, model_name=args.openrouter_model_name)
 
         if predicted_label_str is not None:
             try:
@@ -163,7 +160,8 @@ def main(args):
     eval_results = compute_metrics(true_labels, predicted_labels)
 
     # Add run information to results
-    eval_results['model_used'] = args.gemini_model_name
+    eval_results['provider'] = args.provider
+    eval_results['model_used'] = args.gemini_model_name if args.provider == "gemini" else args.openrouter_model_name
     eval_results['eval_file'] = args.eval_file
     eval_results['total_samples'] = len(eval_data)
     eval_results['successful_classifications'] = len(predicted_labels)
@@ -185,6 +183,7 @@ def main(args):
 
     # Ensure results directory exists
     os.makedirs(args.output_dir, exist_ok=True)
+    # Keep filename stable for backward compatibility, but include provider in the JSON content
     output_eval_file = os.path.join(args.output_dir, "gemini_evaluation_results.json")
     logging.info(f"\nSaving evaluation results to: {output_eval_file}")
     try:
@@ -197,10 +196,12 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate sentence classification using Google Gemini API.")
+    parser = argparse.ArgumentParser(description="Evaluate sentence classification using Google Gemini API or OpenRouter.")
 
     parser.add_argument("--eval_file", type=str, required=True, help="Path to the evaluation data TSV file (text<tab>label).")
+    parser.add_argument("--provider", type=str, choices=["gemini", "openrouter"], default="gemini", help="Provider to use for classification.")
     parser.add_argument("--gemini_model_name", type=str, default=DEFAULT_GEMINI_MODEL, help="Name of the Gemini model to use.")
+    parser.add_argument("--openrouter_model_name", type=str, default=DEFAULT_OPENROUTER_MODEL, help="Name of the OpenRouter model to use.")
     parser.add_argument("--output_dir", type=str, default="results", help="Directory to save evaluation results.")
     parser.add_argument("--delay", type=float, default=0.1, help="Optional delay (seconds) between API calls to avoid rate limits.")
     # Removed args: --model_dir, --max_length, --per_device_eval_batch_size, --force_cpu

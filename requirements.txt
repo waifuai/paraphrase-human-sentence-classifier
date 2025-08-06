@@ -3,6 +3,9 @@
 # Google GenAI SDK (Client-centric API)
 google-genai~=1.28
 
+# OpenRouter HTTP client
+requests>=2.31
+
 # Evaluation
 scikit-learn # For metrics like confusion matrix, precision, recall, f1
 tqdm # Progress bar

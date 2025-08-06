@@ -13,27 +13,28 @@ from typing import Dict, List, Optional, Tuple
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def _load_tsv(file_path: str) -> List[Dict[str, any]]:
-    """Loads a TSV file into a list of dictionaries."""
+    """Loads a TSV file into a list of dictionaries.
+
+    Note:
+        Tests expect FileNotFoundError to propagate when the path does not exist.
+        For empty files, return an empty list without raising.
+    """
     data: List[Dict[str, any]] = []
-    try:
-        with open(file_path, mode='r', encoding='utf-8', newline='') as file:
-            reader = csv.reader(file, delimiter='\t')
-            for i, row in enumerate(reader):
-                if len(row) == 2:
-                    text, label_str = row
-                    try:
-                        label = int(label_str)
-                        if label not in (0, 1):
-                            logging.warning(f"Invalid label '{label_str}' in {file_path} at line {i+1}. Skipping row.")
-                            continue
-                        data.append({"text": text, "label": label})
-                    except ValueError:
-                        logging.warning(f"Invalid label format '{label_str}' in {file_path} at line {i+1}. Skipping row.")
-                else:
-                    logging.warning(f"Skipping malformed row (expected 2 columns, got {len(row)}) in {file_path} at line {i+1}: {row}")
-    except FileNotFoundError:
-        logging.error(f"Data file not found: {file_path}")
-        raise
+    with open(file_path, mode='r', encoding='utf-8', newline='') as file:
+        reader = csv.reader(file, delimiter='\t')
+        for i, row in enumerate(reader):
+            if len(row) == 2:
+                text, label_str = row
+                try:
+                    label = int(label_str)
+                    if label not in (0, 1):
+                        logging.warning(f"Invalid label '{label_str}' in {file_path} at line {i+1}. Skipping row.")
+                        continue
+                    data.append({"text": text, "label": label})
+                except ValueError:
+                    logging.warning(f"Invalid label format '{label_str}' in {file_path} at line {i+1}. Skipping row.")
+            else:
+                logging.warning(f"Skipping malformed row (expected 2 columns, got {len(row)}) in {file_path} at line {i+1}: {row}")
     return data
 
 def load_data_from_tsv(

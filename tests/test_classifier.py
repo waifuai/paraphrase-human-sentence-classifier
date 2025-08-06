@@ -13,7 +13,13 @@ from unittest.mock import patch, MagicMock, mock_open
 # Note: Running tests might require setting PYTHONPATH=. or using `python -m pytest`
 try:
     from classifier.data import load_data_from_tsv
-    from classifier.model import classify_with_gemini, DEFAULT_GEMINI_MODEL, API_KEY_FILE_PATH
+    from classifier.model import (
+        classify_with_gemini,
+        DEFAULT_GEMINI_MODEL,
+        API_KEY_FILE_PATH,
+        classify_with_openrouter,
+        DEFAULT_OPENROUTER_MODEL,
+    )
     from scripts.evaluate import compute_metrics
 except ImportError as e:
     # Handle cases where running pytest directly might cause import issues
@@ -130,107 +136,95 @@ def reset_model_state():
 # Mock Path.home() and Path.is_file() / read_text() for API key tests
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
 def test_initialize_client_key_found(mock_home):
+    # For OpenRouter path (preferred in this repo now)
     with patch('pathlib.Path.is_file', return_value=True), \
-         patch('pathlib.Path.read_text', return_value='fake-api-key'), \
-         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
-         patch('classifier.model.genai') as mock_genai:
-        mock_client = MagicMock()
-        mock_genai.Client.return_value = mock_client
+         patch('pathlib.Path.read_text', return_value='openrouter-fake-api-key'), \
+         patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=True), \
+         patch('classifier.model.requests') as mock_requests:
+        # Mock OpenRouter HTTP response
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": "1"}}]
+        }
+        mock_requests.post.return_value = mock_resp
 
-        from classifier.model import classify_with_gemini
-        import classifier.model as m
-        m._client = None
-        mock_client.models.generate_content.return_value = MagicMock(text='1')
-        res = classify_with_gemini("hello")
+        res = classify_with_openrouter("hello", model_name=DEFAULT_OPENROUTER_MODEL)
         assert res in ('0','1',None)
-        mock_genai.Client.assert_called_once()
+        mock_requests.post.assert_called_once()
 
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
 def test_initialize_client_key_not_found(mock_home):
+     # OpenRouter path
      with patch('pathlib.Path.is_file', return_value=False), \
-          patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True):
-         # Import classify and expect graceful None due to missing key
-         from classifier.model import classify_with_gemini
-         res = classify_with_gemini("hello")
+          patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=True):
+         from classifier.model import classify_with_openrouter
+         res = classify_with_openrouter("hello")
          assert res is None
 
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
 @patch('pathlib.Path.is_file', return_value=True)
-@patch('pathlib.Path.read_text', return_value='fake-api-key')
-def test_classify_with_gemini_success(mock_read, mock_is_file, mock_home):
+@patch('pathlib.Path.read_text', return_value='openrouter-fake-api-key')
+def test_classify_with_openrouter_success(mock_read, mock_is_file, mock_home):
     from classifier import model as m
-    with patch.object(m, "genai") as mock_genai, \
-         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
+    with patch.object(m, "requests") as mock_requests, \
+         patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=True), \
          patch('pathlib.Path.is_file', return_value=True), \
-         patch('pathlib.Path.read_text', return_value='fake-api-key'):
-        mock_client = MagicMock()
+         patch('pathlib.Path.read_text', return_value='openrouter-fake-api-key'):
         mock_resp = MagicMock()
-        mock_resp.text = '1'
-        mock_client.models.generate_content.return_value = mock_resp
-        mock_genai.Client.return_value = mock_client
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "1"}}]}
+        mock_requests.post.return_value = mock_resp
 
-        # fresh client
-        m._client = None
-        result = m.classify_with_gemini("This is a test")
+        result = m.classify_with_openrouter("This is a test")
         assert result == '1'
-        mock_client.models.generate_content.assert_called_once()
+        mock_requests.post.assert_called_once()
 
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
 @patch('pathlib.Path.is_file', return_value=True)
-@patch('pathlib.Path.read_text', return_value='fake-api-key')
-def test_classify_with_gemini_unexpected_output(mock_read, mock_is_file, mock_home):
+@patch('pathlib.Path.read_text', return_value='openrouter-fake-api-key')
+def test_classify_with_openrouter_unexpected_output(mock_read, mock_is_file, mock_home):
     from classifier import model as m
-    with patch.object(m, "genai") as mock_genai, \
-         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
+    with patch.object(m, "requests") as mock_requests, \
+         patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=True), \
          patch('pathlib.Path.is_file', return_value=True), \
-         patch('pathlib.Path.read_text', return_value='fake-api-key'):
-        mock_client = MagicMock()
+         patch('pathlib.Path.read_text', return_value='openrouter-fake-api-key'):
         mock_resp = MagicMock()
-        mock_resp.text = ' The classification is 0 '
-        mock_client.models.generate_content.return_value = mock_resp
-        mock_genai.Client.return_value = mock_client
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"choices": [{"message": {"content": " The classification is 0 "}}]}
+        mock_requests.post.return_value = mock_resp
 
-        m._client = None
-        result = m.classify_with_gemini("Another test")
+        result = m.classify_with_openrouter("Another test")
         assert result == '0'
 
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
 @patch('pathlib.Path.is_file', return_value=True)
-@patch('pathlib.Path.read_text', return_value='fake-api-key')
-def test_classify_with_gemini_api_error(mock_read, mock_is_file, mock_home):
+@patch('pathlib.Path.read_text', return_value='openrouter-fake-api-key')
+def test_classify_with_openrouter_api_error(mock_read, mock_is_file, mock_home):
     from classifier import model as m
-    with patch.object(m, "genai") as mock_genai, \
-         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
+    with patch.object(m, "requests") as mock_requests, \
+         patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=True), \
          patch('pathlib.Path.is_file', return_value=True), \
-         patch('pathlib.Path.read_text', return_value='fake-api-key'):
-        mock_client = MagicMock()
-        mock_client.models.generate_content.side_effect = Exception("API rate limit exceeded")
-        mock_genai.Client.return_value = mock_client
-
-        m._client = None
-        result = m.classify_with_gemini("Error test")
+         patch('pathlib.Path.read_text', return_value='openrouter-fake-api-key'):
+        mock_requests.post.side_effect = Exception("API rate limit exceeded")
+        result = m.classify_with_openrouter("Error test")
         assert result is None
 
 @patch('classifier.model.Path.home', return_value=Path('/fake/home'))
 @patch('pathlib.Path.is_file', return_value=True)
-@patch('pathlib.Path.read_text', return_value='fake-api-key')
-def test_classify_with_gemini_no_text(mock_read, mock_is_file, mock_home):
+@patch('pathlib.Path.read_text', return_value='openrouter-fake-api-key')
+def test_classify_with_openrouter_no_text(mock_read, mock_is_file, mock_home):
     from classifier import model as m
-    with patch.object(m, "genai") as mock_genai, \
-         patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True), \
+    with patch.object(m, "requests") as mock_requests, \
+         patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=True), \
          patch('pathlib.Path.is_file', return_value=True), \
-         patch('pathlib.Path.read_text', return_value='fake-api-key'):
-        mock_client = MagicMock()
+         patch('pathlib.Path.read_text', return_value='openrouter-fake-api-key'):
         mock_resp = MagicMock()
-        # Simulate absence of text and candidates
-        if hasattr(mock_resp, "text"):
-            delattr(mock_resp, "text")
-        mock_resp.candidates = []
-        mock_client.models.generate_content.return_value = mock_resp
-        mock_genai.Client.return_value = mock_client
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"choices": [{"message": {"content": ""}}]}
+        mock_requests.post.return_value = mock_resp
 
-        m._client = None
-        result = m.classify_with_gemini("Blocked content test")
+        result = m.classify_with_openrouter("Blocked content test")
         assert result is None
 
 # -------------------------
