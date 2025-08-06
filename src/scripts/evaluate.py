@@ -211,7 +211,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate sentence classification using Google Gemini API or OpenRouter.")
 
     parser.add_argument("--eval_file", type=str, required=True, help="Path to the evaluation data TSV file (text<tab>label).")
-    parser.add_argument("--provider", type=str, choices=["gemini", "openrouter"], default="gemini", help="Provider to use for classification.")
+    parser.add_argument("--provider", type=str, choices=["gemini", "openrouter"], default="openrouter", help="Provider to use for classification.")
     parser.add_argument("--gemini_model_name", type=str, default=DEFAULT_GEMINI_MODEL, help="Name of the Gemini model to use.")
     parser.add_argument("--openrouter_model_name", type=str, default=DEFAULT_OPENROUTER_MODEL, help="Name of the OpenRouter model to use.")
     parser.add_argument("--output_dir", type=str, default="results", help="Directory to save evaluation results.")

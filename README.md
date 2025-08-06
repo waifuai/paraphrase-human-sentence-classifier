@@ -1,12 +1,12 @@
-# Human vs. Machine Sentence Classifier (Google GenAI SDK and OpenRouter)
+# Human vs. Machine Sentence Classifier (OpenRouter default; Google GenAI optional)
 
-This project classifies whether a sentence is human-generated or machine-generated using the Google GenAI SDK, and can alternatively use OpenRouter.
+This project classifies whether a sentence is human-generated or machine-generated using OpenRouter by default, and can alternatively use the Google GenAI SDK.
 
 ## Overview
 
 The classifier sends sentences to a specified provider:
-- Google Gemini via the Google GenAI SDK (default model: `gemini-2.5-pro`)
 - OpenRouter via HTTPS (default model: `openrouter/horizon-beta`)
+- Google Gemini via the Google GenAI SDK (default model: `gemini-2.5-pro`)
 
 A carefully crafted prompt instructs the model to return '1' for human-written text and '0' for machine-generated text. The project includes scripts for evaluation and basic data handling.
 
