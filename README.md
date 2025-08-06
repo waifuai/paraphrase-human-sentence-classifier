@@ -5,7 +5,7 @@ This project classifies whether a sentence is human-generated or machine-generat
 ## Overview
 
 The classifier sends sentences to a specified provider:
-- OpenRouter via HTTPS (default model: `openrouter/horizon-beta`)
+- OpenRouter via HTTPS (default model: `deepseek/deepseek-r1-0528:free`)
 - Google Gemini via the Google GenAI SDK (default model: `gemini-2.5-pro`)
 
 A carefully crafted prompt instructs the model to return '1' for human-written text and '0' for machine-generated text. The project includes scripts for evaluation and basic data handling.
@@ -81,15 +81,15 @@ Run the evaluation script using the Python interpreter from your virtual environ
 To use OpenRouter instead of Gemini:
 ```bash
 # Windows:
-.venv/Scripts/python.exe -m scripts.evaluate --eval_file data/eval.tsv --provider openrouter --openrouter_model_name openrouter/horizon-beta
+.venv/Scripts/python.exe -m scripts.evaluate --eval_file data/eval.tsv --provider openrouter --openrouter_model_name deepseek/deepseek-r1-0528:free
 # Linux/macOS:
-# .venv/bin/python -m scripts.evaluate --eval_file data/eval.tsv --provider openrouter --openrouter_model_name openrouter/horizon-beta
+# .venv/bin/python -m scripts.evaluate --eval_file data/eval.tsv --provider openrouter --openrouter_model_name deepseek/deepseek-r1-0528:free
 ```
 
 **Optional Arguments:**
 - `--eval_file`: (Required) Path to your evaluation TSV file.
 - `--provider`: Choose `gemini` or `openrouter` (default: `gemini`).
-- `--openrouter_model_name`: OpenRouter model (default: value from ~/.model-openrouter if present, else `openrouter/horizon-beta`).
+- `--openrouter_model_name`: OpenRouter model (default: value from ~/.model-openrouter if present, else `deepseek/deepseek-r1-0528:free`).
 - `--gemini_model_name`: Gemini model (default: value from ~/.model-gemini if present, else `gemini-2.5-pro`).
 - `--output_dir`: Directory to save the evaluation results JSON (default: `results`).
 - `--delay`: Optional delay between API calls to mitigate rate limits (default: 0.1s).

@@ -37,7 +37,7 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Hardcoded fallbacks if no override files are present
 _DEFAULT_GEMINI_MODEL_FALLBACK = "gemini-2.5-pro"
-_DEFAULT_OPENROUTER_MODEL_FALLBACK = "openrouter/horizon-beta"
+_DEFAULT_OPENROUTER_MODEL_FALLBACK = "deepseek/deepseek-r1-0528:free"
 
 # --- Global state ---
 _client: Optional["genai.Client"] = None
