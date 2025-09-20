@@ -24,7 +24,11 @@ try:
         DEFAULT_GEMINI_MODEL,
         classify_with_openrouter,
         DEFAULT_OPENROUTER_MODEL,
+        classify_text,
+        ClassificationResult,
     )
+    from classifier.config import get_config
+    from classifier.cache import get_cache
 except Exception:
     # Fallback for environments resolving relative imports within package context
     from ..classifier.data import load_data_from_tsv  # type: ignore
@@ -33,7 +37,11 @@ except Exception:
         DEFAULT_GEMINI_MODEL,
         classify_with_openrouter,
         DEFAULT_OPENROUTER_MODEL,
+        classify_text,
+        ClassificationResult,
     )
+    from ..classifier.config import get_config  # type: ignore
+    from ..classifier.cache import get_cache  # type: ignore
 
 # Attempt to import tqdm for progress bar
 try:
@@ -106,13 +114,12 @@ def main(args):
     logging.info(f"Evaluation data size: {len(eval_data)}")
 
     # --- 2. Run Classification with selected provider ---
-    if args.provider == "gemini":
-        logging.info(f"Running classification using Gemini model: {args.gemini_model_name}")
-    else:
-        logging.info(f"Running classification using OpenRouter model: {args.openrouter_model_name}")
+    logging.info(f"Running classification using {args.provider} provider")
     true_labels = []
     predicted_labels = []
     api_errors = 0
+    total_response_time = 0.0
+    successful_classifications = 0
     start_time = time.time()
 
     # Use tqdm for progress bar if available
@@ -126,26 +133,30 @@ def main(args):
             logging.warning(f"Skipping invalid item at index {i}: {item}")
             continue
 
-        # Call provider API
-        if args.provider == "gemini":
-            predicted_label_str = classify_with_gemini(text, model_name=args.gemini_model_name)
-        else:
-            predicted_label_str = classify_with_openrouter(text, model_name=args.openrouter_model_name)
+        # Call provider API using unified function
+        result = classify_text(
+            text,
+            provider=args.provider,
+            gemini_model=args.gemini_model_name,
+            openrouter_model=args.openrouter_model_name,
+            max_retries=3
+        )
 
-        if predicted_label_str is not None:
+        if result.is_success:
             try:
-                predicted_label = int(predicted_label_str)
+                predicted_label = int(result.label)
                 true_labels.append(true_label)
                 predicted_labels.append(predicted_label)
+                successful_classifications += 1
+                if result.response_time:
+                    total_response_time += result.response_time
             except ValueError:
-                 logging.error(f"Gemini returned non-integer value '{predicted_label_str}' for text: '{text[:50]}...'")
-                 api_errors += 1
+                logging.error(f"Invalid label format '{result.label}' for text: '{text[:50]}...'")
+                api_errors += 1
         else:
-            # Handle API error or None response (e.g., unexpected format)
-            logging.warning(f"Failed to get valid classification for item {i}. Text: '{text[:50]}...'")
+            # Handle API error or None response
+            logging.warning(f"Failed to get valid classification for item {i}: {result.error}")
             api_errors += 1
-            # Optional: Add a placeholder prediction (e.g., opposite of true label)
-            # or simply skip this sample for metric calculation. Skipping for now.
 
         # Optional: Add delay between API calls to avoid rate limits
         if args.delay > 0:
@@ -153,15 +164,25 @@ def main(args):
 
         # Print progress periodically if tqdm is not available
         if not tqdm and (i + 1) % 50 == 0:
-             logging.info(f"Processed {i+1}/{len(eval_data)} items...")
+            avg_response_time = total_response_time / max(successful_classifications, 1)
+            logging.info(f"Processed {i+1}/{len(eval_data)} items. "
+                        f"Success rate: {successful_classifications/(i+1)*100:.1f}%. "
+                        f"Avg response time: {avg_response_time:.2f}s")
 
 
     end_time = time.time()
     duration = end_time - start_time
+
+    # Calculate performance metrics
+    avg_response_time = total_response_time / max(successful_classifications, 1)
+    success_rate = successful_classifications / len(eval_data) * 100
+
     logging.info(f"Classification finished in {duration:.2f} seconds.")
     logging.info(f"Total items processed: {len(eval_data)}")
-    logging.info(f"Successful classifications: {len(predicted_labels)}")
+    logging.info(f"Successful classifications: {successful_classifications}")
     logging.info(f"API errors/invalid responses: {api_errors}")
+    logging.info(f"Success rate: {success_rate:.1f}%")
+    logging.info(f"Average response time: {avg_response_time:.2f}s")
 
     if not predicted_labels:
         logging.error("No successful classifications were made. Cannot compute metrics.")
@@ -176,14 +197,40 @@ def main(args):
     eval_results['model_used'] = args.gemini_model_name if args.provider == "gemini" else args.openrouter_model_name
     eval_results['eval_file'] = args.eval_file
     eval_results['total_samples'] = len(eval_data)
-    eval_results['successful_classifications'] = len(predicted_labels)
+    eval_results['successful_classifications'] = successful_classifications
     eval_results['api_errors'] = api_errors
     eval_results['duration_seconds'] = duration
+    eval_results['average_response_time'] = avg_response_time
+    eval_results['success_rate'] = success_rate
+
+    # Add cache statistics if available
+    if get_cache:
+        cache = get_cache()
+        cache_stats = cache.get_stats()
+        eval_results['cache_stats'] = cache_stats
 
     # --- 4. Print and Save Results ---
-    print("\n--- Gemini Evaluation Results ---")
-    # Pretty print the results
+    print(f"\n--- {args.provider.capitalize()} Evaluation Results ---")
+    print("=" * 50)
+
+    # Performance metrics
+    print("PERFORMANCE METRICS:")
+    print(f"  Provider: {eval_results['provider']}")
+    print(f"  Model: {eval_results['model_used']}")
+    print(f"  Total samples: {eval_results['total_samples']}")
+    print(f"  Successful classifications: {eval_results['successful_classifications']}")
+    print(f"  API errors: {eval_results['api_errors']}")
+    print(f"  Success rate: {eval_results['success_rate']:.1f}%")
+    print(f"  Average response time: {eval_results['average_response_time']:.2f}s")
+    print(f"  Total duration: {eval_results['duration_seconds']:.2f}s")
+
+    print("\nCLASSIFICATION METRICS:")
+    # Classification metrics
     for key, value in eval_results.items():
+        if key in ['provider', 'model_used', 'eval_file', 'total_samples',
+                   'successful_classifications', 'api_errors', 'duration_seconds',
+                   'average_response_time', 'success_rate']:
+            continue  # Skip performance metrics already shown
         if key == "confusion_matrix":
             print(f"  Confusion Matrix (TN, FP / FN, TP):")
             print(f"    {value[0]}")
@@ -208,14 +255,51 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate sentence classification using Google Gemini API or OpenRouter.")
+    # Get configuration for defaults
+    config = get_config() if get_config else None
 
-    parser.add_argument("--eval_file", type=str, required=True, help="Path to the evaluation data TSV file (text<tab>label).")
-    parser.add_argument("--provider", type=str, choices=["gemini", "openrouter"], default="openrouter", help="Provider to use for classification.")
-    parser.add_argument("--gemini_model_name", type=str, default=DEFAULT_GEMINI_MODEL, help="Name of the Gemini model to use.")
-    parser.add_argument("--openrouter_model_name", type=str, default=DEFAULT_OPENROUTER_MODEL, help="Name of the OpenRouter model to use.")
-    parser.add_argument("--output_dir", type=str, default="results", help="Directory to save evaluation results.")
-    parser.add_argument("--delay", type=float, default=0.1, help="Optional delay (seconds) between API calls to avoid rate limits.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate sentence classification using Google Gemini API or OpenRouter.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    parser.add_argument(
+        "--eval_file",
+        type=str,
+        required=True,
+        help="Path to the evaluation data TSV file (text<tab>label)."
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        choices=["gemini", "openrouter"],
+        default=config.default_provider if config else "openrouter",
+        help="Provider to use for classification."
+    )
+    parser.add_argument(
+        "--gemini_model_name",
+        type=str,
+        default=config.effective_gemini_model if config else DEFAULT_GEMINI_MODEL,
+        help="Name of the Gemini model to use."
+    )
+    parser.add_argument(
+        "--openrouter_model_name",
+        type=str,
+        default=config.effective_openrouter_model if config else DEFAULT_OPENROUTER_MODEL,
+        help="Name of the OpenRouter model to use."
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default=config.output_dir if config else "results",
+        help="Directory to save evaluation results."
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=config.evaluation_delay if config else 0.1,
+        help="Optional delay (seconds) between API calls to avoid rate limits."
+    )
     # Removed args: --model_dir, --max_length, --per_device_eval_batch_size, --force_cpu
 
     args = parser.parse_args()
