@@ -1,3 +1,17 @@
+"""
+Unit tests for the Human/Machine Sentence Classifier.
+
+This module contains comprehensive unit tests for the classifier package,
+including tests for data loading, model classification functionality,
+and evaluation metrics computation. The tests use pytest fixtures and
+mocks to ensure isolated testing of components.
+
+The tests cover:
+- Data loading from TSV files with various edge cases
+- Model classification using both Gemini and OpenRouter providers
+- Evaluation metrics computation and validation
+- Error handling and edge cases
+"""
 import os
 import pytest
 import tempfile

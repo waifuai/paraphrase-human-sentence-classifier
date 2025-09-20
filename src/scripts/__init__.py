@@ -1,1 +1,7 @@
-# Package initializer for scripts to enable absolute imports in tests (from scripts.evaluate import compute_metrics)
+"""
+Package initialization for the scripts module.
+
+This __init__.py file makes the scripts directory a Python package,
+enabling absolute imports from the scripts submodules and providing
+a namespace for evaluation and utility scripts.
+"""
