@@ -1,24 +1,8 @@
-# Runtime dependencies (flexible for OSS consumers)
-
-# Google GenAI SDK (Client-centric API)
-google-genai~=1.28
-
-# OpenRouter HTTP client
-requests>=2.31
-
-# Evaluation and metrics
-scikit-learn>=1.3.0  # For metrics like confusion matrix, precision, recall, f1
-tqdm>=4.65.0  # Progress bar
-
-# Data validation and type checking
-pydantic>=2.0.0  # Data validation and settings management
-
-# Caching
-cachetools>=5.3.0  # In-memory caching for API responses
-
-# Configuration
-python-dotenv>=1.0.0  # Environment variable management
-
-# Testing (keep here for now; can be split to requirements-dev.txt later if desired)
-pytest>=7.4.0
-pytest-cov>=4.1.0  # Test coverage
+requests==2.33.1
+scikit-learn==1.6.1
+tqdm==4.67.3
+pydantic==2.13.0
+cachetools==5.5.2
+python-dotenv==1.1.1
+pytest==9.0.3
+pytest-cov==6.1.1
