@@ -37,7 +37,7 @@ DEFAULT_CONFIG = {
     'openrouter': {
         'api_key_file': '~/.api-openrouter',
         'model_file': '~/.model-openrouter',
-        'default_model': 'deepseek/deepseek-r1-0528:free',
+        'default_model': 'openrouter/free',
         'max_retries': 3,
         'timeout': 60
     },

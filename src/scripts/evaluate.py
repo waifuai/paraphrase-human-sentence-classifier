@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Evaluation Script for the Human/Machine Sentence Classifier using Google Gemini API or OpenRouter.
+Evaluation Script for the Human/Machine Sentence Classifier using OpenRouter.
 
-This script loads evaluation data, classifies each sentence using the selected provider,
+This script loads evaluation data, classifies each sentence using OpenRouter,
 and computes metrics including confusion matrix, accuracy, precision, recall, and F1-score.
 """
 
@@ -20,8 +20,6 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, con
 try:
     from classifier.data import load_data_from_tsv
     from classifier.model import (
-        classify_with_gemini,
-        DEFAULT_GEMINI_MODEL,
         classify_with_openrouter,
         DEFAULT_OPENROUTER_MODEL,
         classify_text,
@@ -33,8 +31,6 @@ except Exception:
     # Fallback for environments resolving relative imports within package context
     from ..classifier.data import load_data_from_tsv  # type: ignore
     from ..classifier.model import (  # type: ignore
-        classify_with_gemini,
-        DEFAULT_GEMINI_MODEL,
         classify_with_openrouter,
         DEFAULT_OPENROUTER_MODEL,
         classify_text,
@@ -113,8 +109,8 @@ def main(args):
 
     logging.info(f"Evaluation data size: {len(eval_data)}")
 
-    # --- 2. Run Classification with selected provider ---
-    logging.info(f"Running classification using {args.provider} provider")
+    # --- 2. Run Classification with OpenRouter ---
+    logging.info("Running classification using OpenRouter provider")
     true_labels = []
     predicted_labels = []
     api_errors = 0
@@ -133,12 +129,10 @@ def main(args):
             logging.warning(f"Skipping invalid item at index {i}: {item}")
             continue
 
-        # Call provider API using unified function
-        result = classify_text(
+        # Call OpenRouter API
+        result = classify_with_openrouter(
             text,
-            provider=args.provider,
-            gemini_model=args.gemini_model_name,
-            openrouter_model=args.openrouter_model_name,
+            model_name=args.model_name,
             max_retries=3
         )
 
@@ -193,8 +187,8 @@ def main(args):
     eval_results = compute_metrics(true_labels, predicted_labels)
 
     # Add run information to results
-    eval_results['provider'] = args.provider
-    eval_results['model_used'] = args.gemini_model_name if args.provider == "gemini" else args.openrouter_model_name
+    eval_results['provider'] = 'openrouter'
+    eval_results['model_used'] = args.model_name
     eval_results['eval_file'] = args.eval_file
     eval_results['total_samples'] = len(eval_data)
     eval_results['successful_classifications'] = successful_classifications
@@ -210,7 +204,7 @@ def main(args):
         eval_results['cache_stats'] = cache_stats
 
     # --- 4. Print and Save Results ---
-    print(f"\n--- {args.provider.capitalize()} Evaluation Results ---")
+    print(f"\n--- OpenRouter Evaluation Results ---")
     print("=" * 50)
 
     # Performance metrics
@@ -242,8 +236,7 @@ def main(args):
 
     # Ensure results directory exists
     os.makedirs(args.output_dir, exist_ok=True)
-    # Keep filename stable for backward compatibility, but include provider in the JSON content
-    output_eval_file = os.path.join(args.output_dir, "gemini_evaluation_results.json")
+    output_eval_file = os.path.join(args.output_dir, "evaluation_results.json")
     logging.info(f"\nSaving evaluation results to: {output_eval_file}")
     try:
         with open(output_eval_file, "w", encoding='utf-8') as writer:
@@ -259,7 +252,7 @@ if __name__ == "__main__":
     config = get_config() if get_config else None
 
     parser = argparse.ArgumentParser(
-        description="Evaluate sentence classification using Google Gemini API or OpenRouter.",
+        description="Evaluate sentence classification using OpenRouter.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -270,20 +263,7 @@ if __name__ == "__main__":
         help="Path to the evaluation data TSV file (text<tab>label)."
     )
     parser.add_argument(
-        "--provider",
-        type=str,
-        choices=["gemini", "openrouter"],
-        default=config.default_provider if config else "openrouter",
-        help="Provider to use for classification."
-    )
-    parser.add_argument(
-        "--gemini_model_name",
-        type=str,
-        default=config.effective_gemini_model if config else DEFAULT_GEMINI_MODEL,
-        help="Name of the Gemini model to use."
-    )
-    parser.add_argument(
-        "--openrouter_model_name",
+        "--model_name",
         type=str,
         default=config.effective_openrouter_model if config else DEFAULT_OPENROUTER_MODEL,
         help="Name of the OpenRouter model to use."
@@ -300,7 +280,6 @@ if __name__ == "__main__":
         default=config.evaluation_delay if config else 0.1,
         help="Optional delay (seconds) between API calls to avoid rate limits."
     )
-    # Removed args: --model_dir, --max_length, --per_device_eval_batch_size, --force_cpu
 
     args = parser.parse_args()
     main(args)
